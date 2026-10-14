@@ -34,3 +34,5 @@ grant=true;vm.runInContext('connectGoogle()',ctx);await callback({access_token:'
 console.log('Passed fixture browser flow: consent, live mapping, no invented progress, stale network handling, token expiry, missing scopes, and disconnect.');})().catch(e=>{console.error(e);process.exitCode=1});
 
 }
+
+require('./session.cjs');
