@@ -36,3 +36,6 @@ console.log('Passed fixture browser flow: consent, live mapping, no invented pro
 }
 
 require('./session.cjs');
+
+
+require('./ai-review.cjs');
