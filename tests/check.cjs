@@ -1,0 +1,16 @@
+const fs=require('node:fs');const vm=require('node:vm');const assert=require('node:assert/strict');const path=require('node:path');
+const root=path.join(__dirname,'..');
+const html=fs.readFileSync(path.join(root,'site/production-support/index.html'),'utf8');
+const code=html.match(/<script>([\s\S]*?)<\/script>/)[1];new Function(code);
+const ctx={window:{},Date,Set,Error};vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(root,'site/shared/sheet-data.js'),'utf8'),ctx);
+const {parseDate,selectTab,mapRows}=ctx.window.SomaiyaSheet;
+assert.equal(parseDate('05-10-2026'),'2026-10-05');assert.equal(parseDate('31-02-2026'),'');
+const tab=selectTab([{properties:{title:'All Module Bugs, Issues',sheetId:24}}]);assert.equal(tab.sheetId,24);
+assert.throws(()=>selectTab([{properties:{title:'Production Issue',sheetId:1}}]));
+const mapped=mapRows([['Description','Module','Status','Date Reported','Resolution Date','Progress'],['Payment issue','Payments','Completed','05-10-2026','13-10-2026',''],['Another issue','Hostel','In Progress','12-10-2026','','50%']],tab);
+assert.equal(mapped.issues[0].status,'Resolved');assert.equal(mapped.issues[0].progress,null);assert.equal(mapped.issues[1].progress,50);
+assert.equal(mapped.issues[0].resolved,'2026-10-13');assert.ok(mapped.issues[0].sourceUrl.includes('gid=24'));
+assert.ok(!html.includes("fetch('/api/"));assert.ok(!html.includes("fetch('/auth/"));assert.ok(!html.includes('localStorage'));assert.ok(!html.includes('sessionStorage'));assert.ok(!html.includes('client_secret'));assert.ok(!html.includes('issue-form'));
+assert.ok(html.includes('spreadsheets.readonly'));assert.ok(html.includes('tokenExpiresAt'));assert.ok(html.includes('https://accounts.google.com/gsi/client'));
+assert.ok(fs.existsSync(path.join(root,'site/assets/somaiya-university.svg')));
+console.log('Passed: browser syntax, selected-tab mapping, dates, progress, Pages paths, read-only scope, and no backend or persistent token storage.');
