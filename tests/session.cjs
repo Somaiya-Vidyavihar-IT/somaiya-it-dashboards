@@ -13,3 +13,13 @@ a.onmessage({data:{type:'set',session:{accessToken:'fixture-session-token',expir
 for(const name of ['production-support','koha-support']){const html=fs.readFileSync(path.join(root,'site',name,'index.html'),'utf8');assert.ok(html.includes('shared/session.js'));assert.ok(html.includes('SomaiyaSession?.subscribe'));assert.ok(html.includes('SomaiyaSession?.clear'));assert.ok(!/localStorage|sessionStorage|client_secret/.test(html));new Function(html.match(/<script>([\s\S]*?)<\/script>/)[1]);}
 const hub=fs.readFileSync(path.join(root,'site/index.html'),'utf8');assert.ok(hub.includes('dashboard-frame'));assert.ok(hub.includes('hub-disconnect'));new Function(hub.match(/<script>([\s\S]*?)<\/script>/)[1]);
 console.log('Passed: shared session handoff, new-tab adoption, global logout, expired-token rejection, expiry propagation, and dashboard integration.');
+{
+ const channels=[];
+ class Channel{constructor(name){this.name=name;channels.push(this);}postMessage(data){for(const channel of channels)if(channel!==this&&channel.name===this.name)channel.onmessage?.({data:structuredClone(data)});}}
+ function client(parent){const win={location:{origin:'https://fixture.example'},addEventListener(){}};win.parent=parent||win;const c={window:win,document:{currentScript:{src:'https://fixture.example/shared/session.js?v=2'}},URL,Date,Set,Number,BroadcastChannel:Channel,SharedWorker:class{constructor(){throw Error('Fixture fallback');}},setTimeout(){return 1},clearTimeout(){}};vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(root,'site/shared/session.js'),'utf8'),c);return win;}
+ const first=client();first.SomaiyaSession.set({accessToken:'fixture-session-token',email:'fixture@example.com',expiresAt:Date.now()+60000});
+ const second=client();let adopted;second.SomaiyaSession.subscribe(s=>adopted=s);assert.equal(adopted.email,'fixture@example.com');
+ const embedded=client(first);assert.equal(embedded.SomaiyaSession,first.SomaiyaSession);
+ let loggedOut;first.SomaiyaSession.subscribe(s=>loggedOut=s);second.SomaiyaSession.clear();assert.equal(loggedOut.accessToken,'');
+ console.log('Passed: newly loaded page recovery, embedded portal session ownership, and cross-tab logout fallback.');
+}
