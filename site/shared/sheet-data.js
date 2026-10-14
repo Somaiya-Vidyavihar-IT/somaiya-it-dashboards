@@ -32,6 +32,7 @@ function mapRows(values, tab) {
   };
   const has = (...names) => names.some(name=>headings.includes(name));
   const warnings = [];
+  if(!has('ai review'))warnings.push('AI Review column was not found in the selected tab.');
   let missingReported=0, missingResolved=0, invalidDates=0, unknownStatus=0, invalidProgress=0;
   const ids = new Set(); let duplicateIds=0, missingIds=0;
   const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -58,7 +59,7 @@ function mapRows(values, tab) {
     if(rawProgress){const numeric=Number(rawProgress.replace(/%$/, '').trim());if(Number.isFinite(numeric)&&numeric>=0&&numeric<=100)progress=numeric;else invalidProgress++}
     const rawPriority=get(row,'priority');
     const priorities={'super critical':'Super Critical','urgent':'Urgent','high':'High','normal':'Normal'};
-    return [{id,key:`${tab.sheetId}:${rowNumber}`,description,module:get(row,'module')||'Unspecified',status,type:get(row,'type')||'Unspecified',priority:priorities[normalize(rawPriority)]||rawPriority||'Unspecified',owner:get(row,'assigned to','owner'),progress,reported,eta,resolved,blocker:get(row,'blocker','next action'),notes:get(row,'notes','resolution notes','remarks'),updated:get(row,'last updated','updated'),sourceUrl:`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${tab.sheetId}&range=A${rowNumber}`}];
+    return [{id,key:`${tab.sheetId}:${rowNumber}`,description,module:get(row,'module')||'Unspecified',status,type:get(row,'type')||'Unspecified',priority:priorities[normalize(rawPriority)]||rawPriority||'Unspecified',owner:get(row,'assigned to','owner'),progress,reported,eta,resolved,blocker:get(row,'blocker','next action'),notes:get(row,'notes','resolution notes','remarks'),aiReview:get(row,'ai review'),updated:get(row,'last updated','updated'),sourceUrl:`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${tab.sheetId}&range=A${rowNumber}`}];
   });
   if(!has('module'))warnings.push('Module column is missing.');
   if(!has('status'))warnings.push('Status column is missing; all rows are treated as pending.');
