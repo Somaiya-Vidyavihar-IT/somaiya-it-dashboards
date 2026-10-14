@@ -28,12 +28,16 @@ Project from the supplied screenshot: **KJS Master Tracker** (`kjs-master-tracke
 
 ```text
 site/
-  index.html                  # Dashboard hub landing page
+  index.html                  # Dashboard hub with persistent navigation
   config.js                   # Public OAuth Client ID
   assets/                     # Somaiya branding assets
-  shared/sheet-data.js         # Shared field mapping and date parsing
+  shared/sheet-data.js         # Production field mapping and date parsing
+  shared/session.js           # Global in-memory session client
+  shared/session-worker.js    # Shared session owner
   production-support/
-    index.html                # First dashboard
+    index.html                # Production Support
+  koha-support/
+    index.html                # KOHA Library Support
 .github/workflows/pages.yml   # Static deployment workflow
 tests/check.cjs               # Source and data checks
 ```
@@ -46,9 +50,13 @@ The app reads only the spreadsheet `1Slj1cNkj4ZKE1-lXc1Ci-wwaibIEu0-lcRNnxkb7keU
 
 Supported columns: Description, Module, Status, Type, Priority, Assigned To, ETA, Date Reported. Add **Resolution Date** for daily closures and **Issue ID** for stable references. Progress, Blocker, Notes, and Last Updated are optional. Dates accept YYYY-MM-DD or DD-MM-YYYY / DD/MM/YYYY.
 
+## KOHA Library Support data
+
+Reads only **Form Responses 1** in spreadsheet `1zNrZWjO8hSxGbHCbTuf7K7OEWu85V8Jg9DOse7r7HtA`. The **Test** column is displayed as Library / institute. Timestamp is the reported date, and Assigned Date and Time is the assignment date. Blank status counts as Needs triage. Add **Resolution Date** for daily closure counts; assignment dates are never used as resolution dates. Missing Case IDs use row references. Library/category/owner filters, recurring issue counts, queue aging, and daily reports are available.
+
 ## Connection and reports
 
-- Google authorization uses the Google Identity Services token model. Access tokens and issue data stay in the page's memory and are cleared on disconnect or reload. They are not written to browser storage, the repository, or the URL.
+- Google authorization uses the Google Identity Services token model. Access tokens stay in shared browser memory. Connect once and use the hub to switch dashboards. Other open dashboard tabs can adopt the connection, including after reload while another connected hub/tab remains open. Disconnect clears authorization and sheet data across all connected dashboards. Closing every hub/dashboard tab ends the in-memory session. They are not written to browser storage, the repository, or the URL.
 - The dashboard refreshes every 30 seconds while visible and when returning to the window. Browser/network delays can affect refresh timing.
 - When a Google access token expires, users must click **Connect with Google** again. This Pages version has no server-side refresh token store and does not automatically renew authorization indefinitely.
 - Reports recalculate from the current sheet. Automatic daily delivery while nobody has the page open needs a separate scheduled service. Reopen/deletion history needs saved snapshots or an audit log.
