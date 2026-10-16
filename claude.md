@@ -38,3 +38,14 @@ node tests/browser-flow.cjs
 Use synthetic fixtures and relevant live checks without writing test data into production sheets. For documentation-only changes, validate the documents against actual files and workflow commands.
 
 When deployment is authorized, verify the Actions result and affected deployed behavior. State which checks were fixtures and which were live. Do not claim permanent Google login, unattended reports, historical review storage, or completed mobile support.
+
+
+## UAT Observations dashboard
+
+`site/uat-observations/index.html` adds the SF-ABACUS Access Control & ID Cards report at `#/uat-observations`. It reads only spreadsheet `1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4`, tab **UAT Obervations** (intentional source spelling), using the same shared Google authorization.
+
+Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiya IT/ID Office team. Columns are matched by name. Optional AI Review is supporting text in search, details, and exports. Dates accept Sheets serial values and day/month/year strings. Only explicit vertical merges in Date Marked share their anchor date; ordinary blank dates remain unknown. Rows without observation text are excluded and non-empty exclusions are counted in warnings.
+
+Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
+
+`tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.
