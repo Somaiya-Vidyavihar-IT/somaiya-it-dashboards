@@ -22,7 +22,17 @@ Tracks pending/resolved issues, module, priority, owner, supplied progress, repo
 
 Tracks library software issues by library/institute, category, request type, status, assigned team, reported date, and assignment date. Includes recurring issues, unassigned pending issues, queue aging, workload, and daily reports.
 
-### AI Review in both dashboards
+### UAT Observations
+
+`site/uat-observations/index.html` adds the SF-ABACUS Access Control & ID Cards report at `#uat-observations`. It reads only spreadsheet `1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4`, tab **UAT Obervations** (intentional source spelling), using the same shared Google authorization.
+
+Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiya IT/ID Office team. Columns are matched by name. Optional AI Review is supporting text in search, details, and exports. Dates accept Sheets serial values and day/month/year strings. Only explicit vertical merges in Date Marked share their anchor date; ordinary blank dates remain unknown. Rows without observation text are excluded and non-empty exclusions are counted in warnings.
+
+Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
+
+`tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.
+
+### AI Review in the dashboards
 
 The optional **AI Review** column supplies supporting analysis:
 
@@ -38,7 +48,7 @@ Blank or whitespace-only cells display **No AI review available**. Reviews retai
 1. Open a dashboard and select **Connect with Google**.
 2. Choose an authorized organization account that can read its source sheet.
 3. Use **All dashboards** to switch dashboards with the shared connection.
-4. Use filters, details, and **Daily reports**. Make updates in Google Sheets.
+4. Use filters, column sorting, details, and **Daily reports**. Make updates in Google Sheets. Queue headers are buttons: select one to sort ascending, again for descending; blank values stay last.
 5. **Disconnect all**, or a dashboard's disconnect action, clears the shared authorization and connected views.
 
 Refresh runs every 30 seconds while visible and on return to the page. Last successful sync and stale-data errors are shown. Network/browser delays can affect timing.
@@ -51,6 +61,7 @@ Only the configured tab's cell values are fetched. Spreadsheet metadata locates 
 | --- | --- | --- |
 | Production Support | [KJS Master Tracker](https://docs.google.com/spreadsheets/d/1Slj1cNkj4ZKE1-lXc1Ci-wwaibIEu0-lcRNnxkb7keU/edit) | `All modules Bugs, Issues`; also accepts `All Module Bugs, Issues` |
 | KOHA Library Support | [KOHA responses](https://docs.google.com/spreadsheets/d/1zNrZWjO8hSxGbHCbTuf7K7OEWu85V8Jg9DOse7r7HtA/edit?gid=122111389) | `Form Responses 1` |
+| UAT Observations | [SF-ABACUS UAT](https://docs.google.com/spreadsheets/d/1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4/edit) | `UAT Obervations` (source spelling) |
 
 ### Production fields
 
@@ -76,6 +87,9 @@ Completed, Resolved, and Closed map to Resolved. Other statuses remain unresolve
 | Ourlib Comment, Remark | Support notes |
 | Resolution Date | Optional recorded closure date |
 | AI Review | Optional supporting analysis |
+| Upload Screenshot (if available) | Optional screenshot links: previews in issue details, a count in the queue, and a Screenshots CSV column |
+
+Screenshot cells may hold several links separated by commas or new lines. Only `https` links are kept; others are counted in a warning and not shown. Google Drive links show a preview loaded by the viewer's browser from Drive, so it appears only for someone signed in to Google in that browser with access to the file (Brave Shields or blocked third-party cookies can also stop it). Otherwise the details show a note and the **Open in Google Drive** link. The dashboard requests no Drive permission.
 
 KOHA reads Google Sheets numeric serial dates to avoid display-format ambiguity. Its formatted-date fallback accepts ISO and the source's month/day/year timestamps. It does not use Production's day/month/year interpretation.
 
@@ -131,19 +145,24 @@ site/
   assets/                         # Somaiya branding
   shared/
     sheet-data.js                 # Production mapping and date validation
+    table-sort.js                 # Accessible queue column sorting
     session.js                    # Shared session client and recovery
     session-worker.js             # Shared session ownership
   production-support/index.html   # Production UI and logic
   koha-support/index.html         # KOHA UI, logic, and mapper
+  uat-observations/index.html     # UAT Observations UI, logic, and mapper
 tests/
   check.cjs                       # Main checks, including KOHA fixtures
   browser-flow.cjs                 # Production fixture flow
   session.cjs                     # Session handoff, recovery, logout, expiry
   ai-review.cjs                   # Review mapping, escaping, filters, exports
+  uat.cjs                         # UAT mapping, merged dates, filters, exports, lifecycle
+  table-sort.cjs                  # Queue sorting, hub accessibility, release token
+  koha-screenshots.cjs            # KOHA screenshot links, previews, export
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-10-19`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 
@@ -162,7 +181,7 @@ node tests/check.cjs
 node tests/browser-flow.cjs
 ```
 
-These use Node.js built-ins and synthetic fixtures; no dependency installation is required. `check.cjs` also invokes the session and AI Review suites. They cover mapping/date handling, authorization behavior, review safety/filtering, and export generation. They do not perform real Google consent or prove sheet permissions.
+These use Node.js built-ins and synthetic fixtures; no dependency installation is required. `check.cjs` also invokes the session, AI Review, UAT, table-sort, and KOHA screenshot suites. They cover mapping/date handling, authorization behavior, review safety/filtering, and export generation. They do not perform real Google consent or prove sheet permissions.
 
 For user-visible changes, verify relevant live flows: connection, switching, another tab, reload recovery, refresh, filters/search, details, and affected reports. Never write test records into production sheets. For documentation-only changes, verify accuracy and paths against the repository.
 
@@ -192,14 +211,3 @@ Use the existing Somaiya assets, Arial, Power Red `#B7202E`, Vitality Red `#ED1C
 - [Google token model](https://developers.google.com/identity/oauth2/web/guides/use-token-model)
 - [Google OAuth client setup](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid)
 - [GitHub Pages](https://docs.github.com/en/pages)
-
-
-## UAT Observations dashboard
-
-`site/uat-observations/index.html` adds the SF-ABACUS Access Control & ID Cards report at `#/uat-observations`. It reads only spreadsheet `1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4`, tab **UAT Obervations** (intentional source spelling), using the same shared Google authorization.
-
-Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiya IT/ID Office team. Columns are matched by name. Optional AI Review is supporting text in search, details, and exports. Dates accept Sheets serial values and day/month/year strings. Only explicit vertical merges in Date Marked share their anchor date; ordinary blank dates remain unknown. Rows without observation text are excluded and non-empty exclusions are counted in warnings.
-
-Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
-
-`tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.

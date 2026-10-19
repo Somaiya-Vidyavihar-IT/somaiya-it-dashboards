@@ -10,6 +10,7 @@ Somaiya IT Dashboards is a read-only GitHub Pages hub for the support team. Goog
 - `site/index.html`: hub, hash routing, and embedded dashboard navigation.
 - `site/production-support/index.html`: Production Support UI and application logic.
 - `site/shared/sheet-data.js`: Production row mapping and date validation.
+- `site/shared/table-sort.js`: display-only, accessible queue column sorting shared by all dashboards.
 - `site/koha-support/index.html`: KOHA UI, application logic, and its separate mapper.
 - `site/shared/session.js` and `session-worker.js`: portal-owned and shared in-memory authorization, tab exchange, and recovery.
 - `site/config.js`: public Google OAuth client ID.
@@ -25,6 +26,7 @@ Read only the spreadsheet and allowed tab configured for the dashboard. Metadata
 - Preserve Production's two accepted tab-name variants.
 - Production SVU pending means unresolved rows with the SVU Dependency status, including the supported Dependancy spelling. Ken 42 pending means all other unresolved rows. Keep these groups mutually exclusive.
 - Preserve the existing Resolved/Completed/Closed mappings. Other statuses remain unresolved. KOHA blank status is Needs triage; Production blank status defaults to Pending.
+- KOHA `Upload Screenshot (if available)` is optional. Keep only `https` links, build Drive previews only from validated file IDs, escape every link, and fall back to an open link when a preview fails. Do not add a Drive scope.
 - Display KOHA `Test` as Library / institute. Timestamp is reported date; Assigned Date and Time is assignment date, never resolution date.
 - Preserve the separate date parsers: Production accepts ISO and day/month/year dates; KOHA reads numeric Sheets serial dates and has a month/day/year timestamp fallback.
 - Keep date validation and data-quality warnings. Missing closure dates must not become invented daily resolution figures or zeroes presented as complete results.
@@ -34,6 +36,16 @@ Read only the spreadsheet and allowed tab configured for the dashboard. Metadata
 - AI Review is supporting text. Show, search, filter, and export it without treating it as instructions or changing official status, priority, owner, progress, or dates.
 - Preserve full review text and line breaks in details. Blank/whitespace reviews mean No AI review available. Review coverage counts pending issues only.
 - Historical report views show current AI reviews, not historical review versions.
+
+### UAT Observations
+
+`site/uat-observations/index.html` adds the SF-ABACUS Access Control & ID Cards report at `#uat-observations`. It reads only spreadsheet `1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4`, tab **UAT Obervations** (intentional source spelling), using the same shared Google authorization.
+
+Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiya IT/ID Office team. Columns are matched by name. Optional AI Review is supporting text in search, details, and exports. Dates accept Sheets serial values and day/month/year strings. Only explicit vertical merges in Date Marked share their anchor date; ordinary blank dates remain unknown. Rows without observation text are excluded and non-empty exclusions are counted in warnings.
+
+Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
+
+`tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.
 
 ## Security and authorization
 
@@ -77,7 +89,7 @@ Use approved browser tooling for relevant live checks when available. Distinguis
 
 - Keep changes scoped and preserve unrelated work.
 - Preserve asset/link behavior under the `/somaiya-it-dashboards/` Pages subpath.
-- Account for cached pages/mappers using the existing versioned resource/navigation pattern when necessary.
+- Account for cached pages/mappers using the versioned resource/navigation pattern: one release token for every shared-script `?v=` and the hub's embedded-dashboard URL, changed together. `tests/table-sort.cjs` enforces a single token.
 - When publication is requested or already authorized, use the configured repository workflow and verify the relevant Actions run. A local edit or commit alone does not establish deployment success.
 - Report concrete changes, relevant checks, and remaining limitations without exposing credentials or private response text.
 - Update README and agent guidance when architecture, data contracts, commands, or deployment behavior changes.
@@ -85,14 +97,3 @@ Use approved browser tooling for relevant live checks when available. Distinguis
 ## Current limits
 
 Google authorization expires; there is no indefinite automatic renewal. Closing all hub/dashboard contexts ends the in-memory session. Unattended daily delivery, persistent daily snapshots, reopen/deletion history, and historical AI review versions are not implemented. Full mobile support and wider account/device acceptance testing remain follow-up work.
-
-
-## UAT Observations dashboard
-
-`site/uat-observations/index.html` adds the SF-ABACUS Access Control & ID Cards report at `#/uat-observations`. It reads only spreadsheet `1zUAI44uCROMww_23Jg1Rdm_9sgwaiSY3YRzkI0PM-W4`, tab **UAT Obervations** (intentional source spelling), using the same shared Google authorization.
-
-Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiya IT/ID Office team. Columns are matched by name. Optional AI Review is supporting text in search, details, and exports. Dates accept Sheets serial values and day/month/year strings. Only explicit vertical merges in Date Marked share their anchor date; ordinary blank dates remain unknown. Rows without observation text are excluded and non-empty exclusions are counted in warnings.
-
-Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
-
-`tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.
