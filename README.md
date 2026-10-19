@@ -48,7 +48,7 @@ Blank or whitespace-only cells display **No AI review available**. Reviews retai
 1. Open a dashboard and select **Connect with Google**.
 2. Choose an authorized organization account that can read its source sheet.
 3. Use **All dashboards** to switch dashboards with the shared connection.
-4. Use filters, column sorting, details, and **Daily reports**. Make updates in Google Sheets. Queue headers are buttons: select one to sort ascending, again for descending; blank values stay last.
+4. Use filters, column sorting, details (Esc, ×, or a tap outside closes them), and **Daily reports**. Make updates in Google Sheets. Queue headers are buttons: select one to sort ascending, again for descending; blank values stay last.
 5. **Disconnect all**, or a dashboard's disconnect action, clears the shared authorization and connected views.
 
 Refresh runs every 30 seconds while visible and on return to the page. Last successful sync and stale-data errors are shown. Network/browser delays can affect timing.
@@ -89,7 +89,7 @@ Completed, Resolved, and Closed map to Resolved. Other statuses remain unresolve
 | AI Review | Optional supporting analysis |
 | Upload Screenshot (if available) | Optional screenshot links: previews in issue details, a count in the queue, and a Screenshots CSV column |
 
-Screenshot cells may hold several links separated by commas or new lines. Only `https` links are kept; others are counted in a warning and not shown. Google Drive links show a preview loaded by the viewer's browser from Drive, so it appears only for someone signed in to Google in that browser with access to the file (Brave Shields or blocked third-party cookies can also stop it). Otherwise the details show a note and the **Open in Google Drive** link. The dashboard requests no Drive permission.
+Screenshot cells may hold several links separated by commas or new lines. Only `https` links are kept; others are counted in a warning and not shown. Google Drive links show a preview loaded by the viewer's browser from Drive, so it appears only for someone signed in to Google in that browser with access to the file (Brave Shields or blocked third-party cookies can also stop it). Otherwise the details show a note and the **Open in Google Drive** link. Select a preview to open a full-screen viewer (arrow keys or ‹ › move between screenshots; Esc, ×, or the dark area closes it). The dashboard requests no Drive permission.
 
 KOHA reads Google Sheets numeric serial dates to avoid display-format ambiguity. Its formatted-date fallback accepts ISO and the source's month/day/year timestamps. It does not use Production's day/month/year interpretation.
 
@@ -162,7 +162,7 @@ tests/
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-10-19`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-10-19-2`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 

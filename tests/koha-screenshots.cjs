@@ -33,6 +33,12 @@ assert.ok(detail.includes('src="https://drive.google.com/thumbnail?id=AAAAAAAAAA
 assert.ok(detail.includes('href="https://drive.google.com/file/d/BBBBBBBBBBBB/view" target="_blank" rel="noopener noreferrer"'));
 assert.ok(detail.includes('referrerpolicy="no-referrer"'));assert.ok(detail.includes('alt="Screenshot 1 for K-1"'));
 assert.ok(elements.get('issue-rows').innerHTML.includes('2 screenshots'));
+assert.equal((detail.match(/<button type="button" class="shot-open" data-shot="\d" aria-label="View Screenshot \d for K-1 full screen">/g)||[]).length,2,'Previews open the viewer');
+run('showShot(1)');assert.equal(elements.get('shot-viewer').open,true);
+assert.equal(elements.get('viewer-img').src,'https://drive.google.com/thumbnail?id=BBBBBBBBBBBB&sz=w2000');assert.equal(elements.get('viewer-caption').textContent,'Screenshot 2 for K-1 (2 of 2)');
+assert.equal(elements.get('viewer-open').href,'https://drive.google.com/file/d/BBBBBBBBBBBB/view');assert.equal(elements.get('viewer-next').hidden,false);
+run('showShot(viewerIndex+1)');assert.equal(elements.get('viewer-caption').textContent,'Screenshot 1 for K-1 (1 of 2)','Next wraps around');
+run('closeShot()');assert.equal(elements.get('shot-viewer').open,false);
 run('showIssue("row-3")');assert.ok(elements.get('detail-content').innerHTML.includes('No screenshot supplied'));
 run('showIssue("row-4")');assert.ok(!elements.get('detail-content').innerHTML.includes('javascript:'),'Rejected links are never rendered');
 
@@ -40,4 +46,5 @@ run('download=(name,text)=>{globalThis.fixtureExport=text};document.getElementBy
 assert.ok(exported.split('\r\n')[0].endsWith('"Screenshots"'));
 assert.ok(exported.includes('"https://drive.google.com/open?id=AAAAAAAAAAAA https://drive.google.com/open?id=BBBBBBBBBBBB"'));
 
-console.log('Passed KOHA screenshots: optional column, https/Drive validation, multiple links, escaped previews with fallback links, queue indicator, CSV column.');
+for(const p of ['production-support','koha-support','uat-observations']){const page=fs.readFileSync(path.join(__dirname,'../site/'+p+'/index.html'),'utf8');assert.ok(page.includes("d.addEventListener('pointerdown'")&&page.includes('if(downOutside&&out(e))'),p+' closes details on an outside tap');}
+console.log('Passed KOHA screenshots: optional column, https/Drive validation, multiple links, escaped previews with fallback links, full-screen viewer, outside-tap close, queue indicator, CSV column.');
