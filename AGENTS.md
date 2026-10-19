@@ -90,6 +90,7 @@ Use approved browser tooling for relevant live checks when available. Distinguis
 - Keep changes scoped and preserve unrelated work.
 - Preserve asset/link behavior under the `/somaiya-it-dashboards/` Pages subpath.
 - Account for cached pages/mappers using the versioned resource/navigation pattern: one release token for every shared-script `?v=` and the hub's embedded-dashboard URL, changed together. `tests/table-sort.cjs` enforces a single token.
+- Test changes on the `dev` branch first: the workflow publishes `main` at the Pages root and `dev` under `/dev/`. Merge `dev` into `main` only when publication is requested.
 - When publication is requested or already authorized, use the configured repository workflow and verify the relevant Actions run. A local edit or commit alone does not establish deployment success.
 - Report concrete changes, relevant checks, and remaining limitations without exposing credentials or private response text.
 - Update README and agent guidance when architecture, data contracts, commands, or deployment behavior changes.

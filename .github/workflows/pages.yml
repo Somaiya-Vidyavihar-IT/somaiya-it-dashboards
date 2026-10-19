@@ -1,7 +1,8 @@
 name: Deploy Somaiya dashboard hub
+# One Pages site: main is served at the root, the dev branch as a preview under /dev/.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,18 +18,50 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Check out source
+      - name: Check out main (live site)
         uses: actions/checkout@v4
-      - name: Check dashboard source
+        with:
+          ref: main
+          path: live
+      - name: Check main source
+        working-directory: live
         run: |
           node tests/check.cjs
           node tests/browser-flow.cjs
+      - name: Check out dev (preview)
+        id: dev-checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          path: dev
+      # A broken dev branch fails its own pushes but never blocks deploying main.
+      - name: Check dev source
+        id: dev-check
+        if: steps.dev-checkout.outcome == 'success'
+        continue-on-error: ${{ github.ref_name != 'dev' }}
+        working-directory: dev
+        run: |
+          node tests/check.cjs
+          node tests/browser-flow.cjs
+      - name: Assemble site
+        env:
+          INCLUDE_DEV: ${{ steps.dev-check.outcome == 'success' }}
+        run: |
+          mkdir _site
+          cp -R live/site/. _site/
+          if [ "$INCLUDE_DEV" = "true" ]; then
+            mkdir _site/dev
+            cp -R dev/site/. _site/dev/
+          else
+            echo "Dev preview not included."
+          fi
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

@@ -23,3 +23,11 @@ console.log('Passed: shared session handoff, new-tab adoption, global logout, ex
  let loggedOut;first.SomaiyaSession.subscribe(s=>loggedOut=s);second.SomaiyaSession.clear();assert.equal(loggedOut.accessToken,'');
  console.log('Passed: newly loaded page recovery, embedded portal session ownership, and cross-tab logout fallback.');
 }
+
+{
+ // Live and /dev/ preview deployments share an origin; their session channels must not.
+ const src=require('node:fs').readFileSync(require('node:path').join(__dirname,'../site/shared/session.js'),'utf8');
+ assert.ok(src.includes("sessionName='somaiya-dashboard-session-v1:'+base.pathname"));
+ assert.ok(src.includes('new BroadcastChannel(sessionName)'));assert.ok(src.includes('name:sessionName'));
+ console.log('Passed: session channel scoped to the deployment path.');
+}

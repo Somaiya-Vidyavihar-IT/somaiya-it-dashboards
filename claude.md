@@ -39,4 +39,4 @@ node tests/browser-flow.cjs
 
 Use synthetic fixtures and relevant live checks without writing test data into production sheets. For documentation-only changes, validate the documents against actual files and workflow commands.
 
-When deployment is authorized, verify the Actions result and affected deployed behavior. State which checks were fixtures and which were live. Do not claim permanent Google login, unattended reports, historical review storage, or completed mobile support.
+Push work to `dev` for the `/dev/` preview; merging into `main` publishes live. When deployment is authorized, verify the Actions result and affected deployed behavior. State which checks were fixtures and which were live. Do not claim permanent Google login, unattended reports, historical review storage, or completed mobile support.

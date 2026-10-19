@@ -187,12 +187,21 @@ For user-visible changes, verify relevant live flows: connection, switching, ano
 
 ## Publishing
 
-The repository uses **main** and the **Deploy Somaiya dashboard hub** Actions workflow.
+The **Deploy Somaiya dashboard hub** Actions workflow publishes one Pages site from two branches:
+
+| Branch | URL | Purpose |
+| --- | --- | --- |
+| `main` | [/somaiya-it-dashboards/](https://somaiya-vidyavihar-it.github.io/somaiya-it-dashboards/) | Live dashboards |
+| `dev` | [/somaiya-it-dashboards/dev/](https://somaiya-vidyavihar-it.github.io/somaiya-it-dashboards/dev/) | Preview for testing before release |
 
 1. In repository **Settings → Pages**, choose **GitHub Actions** as the source.
-2. Commit authorized changes to `main`, or run the workflow manually.
-3. The workflow runs both Node commands above, uploads only `site/`, and deploys the Pages artifact.
-4. Confirm the relevant Actions run succeeded, then verify affected deployed behavior. A successful commit alone is not deployment confirmation.
+2. In **Settings → Environments → github-pages → Deployment branches and tags**, allow both `main` and `dev`.
+3. Push changes to `dev`. The workflow checks out both branches, runs both Node commands on each, copies `main`'s `site/` to the root and `dev`'s `site/` to `/dev/`, and deploys.
+4. Test the preview with real sign-in. The hub shows a **PREVIEW · DEV BRANCH** badge there. The preview uses the same origin, so no OAuth change is needed, and its session is kept separate from the live site's.
+5. When it is ready, merge `dev` into `main` (a pull request is recommended) to publish it live.
+6. Confirm the relevant Actions run succeeded, then verify affected deployed behavior. A successful commit alone is not deployment confirmation.
+
+A failing `dev` branch fails its own pushes but never blocks deploying `main`; the preview is then left out until `dev` passes again. The preview is public like the live shell; Google sheet permissions still protect the data.
 
 Keep documentation and tests outside `site/`; they are excluded from the Pages artifact but remain viewable in the public repository.
 
