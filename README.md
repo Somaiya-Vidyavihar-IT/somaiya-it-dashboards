@@ -47,7 +47,7 @@ Blank or whitespace-only cells display **No AI review available**. Reviews retai
 
 1. Open a dashboard and select **Connect with Google**.
 2. Choose an authorized organization account that can read its source sheet.
-3. Use **All dashboards** to switch dashboards with the shared connection.
+3. Use the tabs in the hub header, or **All dashboards**, to switch dashboards with the shared connection. Inside the hub, dashboards hide the logo, account, and disconnect controls the hub header already shows (`site/shared/embed.js`).
 4. Use filters, column sorting, details (Esc, ×, or a tap outside closes them), and **Daily reports**. Make updates in Google Sheets. Queue headers are buttons: select one to sort ascending, again for descending; blank values stay last.
 5. **Disconnect all**, or a dashboard's disconnect action, clears the shared authorization and connected views.
 
