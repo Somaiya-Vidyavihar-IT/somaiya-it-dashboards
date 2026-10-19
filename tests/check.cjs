@@ -45,3 +45,5 @@ require('./uat.cjs');
 
 
 require('./table-sort.cjs');
+
+require('./koha-screenshots.cjs');
