@@ -75,7 +75,7 @@ Completed, Resolved, and Closed map to Resolved. Other statuses remain unresolve
 | --- | --- |
 | Timestamp | Reported date |
 | Case ID | Identifier; row reference when missing |
-| Test | Library / institute |
+| Institute Name (formerly Test) | Library / institute |
 | Librarian/Staff Name, Email ID, Contact Number | Reporter details |
 | Issue Category | Category |
 | Is it a repetitive issue? | Recurring indicator |

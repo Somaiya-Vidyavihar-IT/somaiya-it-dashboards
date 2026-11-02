@@ -27,7 +27,7 @@ Read only the spreadsheet and allowed tab configured for the dashboard. Metadata
 - Production SVU pending means unresolved rows with the SVU Dependency status, including the supported Dependancy spelling. Ken 42 pending means all other unresolved rows. Keep these groups mutually exclusive.
 - Preserve the existing Resolved/Completed/Closed mappings. Other statuses remain unresolved. KOHA blank status is Needs triage; Production blank status defaults to Pending.
 - KOHA `Upload Screenshot (if available)` is optional. Keep only `https` links, build Drive previews only from validated file IDs, escape every link, and fall back to an open link when a preview fails. Do not add a Drive scope.
-- Display KOHA `Test` as Library / institute. Timestamp is reported date; Assigned Date and Time is assignment date, never resolution date.
+- Display KOHA `Institute Name` (formerly `Test`) as Library / institute. Timestamp is reported date; Assigned Date and Time is assignment date, never resolution date.
 - Preserve the separate date parsers: Production accepts ISO and day/month/year dates; KOHA reads numeric Sheets serial dates and has a month/day/year timestamp fallback.
 - Keep date validation and data-quality warnings. Missing closure dates must not become invented daily resolution figures or zeroes presented as complete results.
 - Display progress percentages only when supplied and valid. Preserve source priority and ownership.
