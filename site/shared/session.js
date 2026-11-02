@@ -5,6 +5,8 @@ if(window.parent!==window&&window.parent.location.origin===window.location.origi
 const base=new URL('.',document.currentScript.src),listeners=new Set();
 // Scope the channel to this deployment's path so /dev/ preview tabs never share or clear the live site's session.
 const sessionName='somaiya-dashboard-session-v1:'+base.pathname;
+// Only the last account email is remembered for one-click reconnect; tokens stay in memory.
+const accountKey='somaiya-dashboard-account-v1:'+base.pathname;
 let worker,current=null,channel,stamp=0,expiryTimer;
 const active=s=>!!s?.accessToken&&s.expiresAt>Date.now();
 function notify(){clearTimeout(expiryTimer);if(active(current))expiryTimer=setTimeout(()=>window.SomaiyaSession.clear('Google authorization expired. Connect with Google again.'),Math.min(current.expiresAt-Date.now(),2147483647));for(const listener of listeners)listener(current);}
@@ -15,7 +17,9 @@ try{worker=new SharedWorker(new URL('session-worker.js',base),{name:sessionName}
 window.SomaiyaSession={
  available:!!worker||!!channel,
  subscribe(listener){listeners.add(listener);if(current)listener(current);return()=>listeners.delete(listener);},
- set(session){adopt({...session,reason:''});if(worker)worker.port.postMessage({type:'set',session});},
+ set(session){try{localStorage.setItem(accountKey,session.email);}catch{}adopt({...session,reason:''});if(worker)worker.port.postMessage({type:'set',session});},
+ lastAccount(){try{return localStorage.getItem(accountKey)||'';}catch{return '';}},
+ forget(){try{localStorage.removeItem(accountKey);}catch{}},
  clear(reason='Disconnected across all dashboards.'){adopt({accessToken:'',expiresAt:0,email:'',reason});if(worker)worker.port.postMessage({type:'clear',reason});}
 };
 window.addEventListener('pagehide',event=>{if(!event.persisted&&worker)worker.port.postMessage({type:'close'});});

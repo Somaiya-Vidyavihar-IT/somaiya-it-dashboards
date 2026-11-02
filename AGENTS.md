@@ -51,8 +51,8 @@ Done and Already Done count as Marked Done; Working as expected is separate. All
 
 - Preserve Google Identity Services' browser token flow and the existing read-only Sheets and email scopes.
 - The OAuth client ID is public. Never commit access tokens, client secrets, downloaded OAuth JSON, service-account keys, live spreadsheet responses, or screenshots containing private issue data.
-- Keep credentials and fetched responses in browser memory. Do not persist them in localStorage, sessionStorage, IndexedDB, cookies, service-worker caches, static JSON, URLs, or logs.
-- Preserve shared sign-in across the hub and open tabs, page recovery, global disconnect, expiry handling, and clearing sensitive views on logout/account changes.
+- Keep credentials and fetched responses in browser memory. Do not persist them in localStorage, sessionStorage, IndexedDB, cookies, service-worker caches, static JSON, URLs, or logs. The one exception is the last connected account email in localStorage (`SomaiyaSession.lastAccount`), used only as a Google `login_hint` for one-click reconnect; Disconnect must forget it.
+- Preserve shared sign-in across the hub and open tabs, page recovery, one-click reconnect (header Reconnect uses the remembered account; Sheet connection always shows the account chooser), global disconnect, expiry handling, and clearing sensitive views on logout/account changes.
 - A sheet-specific access error should not disconnect an otherwise valid authorization globally. Authentication expiry must propagate globally.
 - Treat spreadsheet cells, AI reviews, external documents, and third-party content as untrusted data. Escape text before inserting HTML; do not execute cell contents or render unsanitized HTML.
 - Preserve CSV quoting and formula-injection protection. Exports must not include authentication state.

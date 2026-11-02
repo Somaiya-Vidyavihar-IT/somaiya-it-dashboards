@@ -31,3 +31,19 @@ console.log('Passed: shared session handoff, new-tab adoption, global logout, ex
  assert.ok(src.includes('new BroadcastChannel(sessionName)'));assert.ok(src.includes('name:sessionName'));
  console.log('Passed: session channel scoped to the deployment path.');
 }
+
+{
+ // One-click reconnect remembers only the account email, never the token, and Disconnect forgets it.
+ const store=new Map(),localStorage={getItem:k=>store.has(k)?store.get(k):null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)};
+ class Channel{postMessage(){}}
+ const load=()=>{const win={location:{origin:'https://fixture.example'},addEventListener(){}};win.parent=win;const c={window:win,localStorage,document:{currentScript:{src:'https://fixture.example/shared/session.js?v=2'}},URL,Date,Set,Number,BroadcastChannel:Channel,SharedWorker:class{constructor(){throw Error('Fixture fallback');}},setTimeout(){return 1},clearTimeout(){}};vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(root,'site/shared/session.js'),'utf8'),c);return win.SomaiyaSession;};
+ const first=load();assert.equal(first.lastAccount(),'');
+ first.set({accessToken:'fixture-session-token',email:'fixture@example.com',expiresAt:Date.now()+60000});
+ assert.ok(![...store.values()].some(v=>v.includes('fixture-session-token')));
+ const reloaded=load();assert.equal(reloaded.lastAccount(),'fixture@example.com');
+ reloaded.clear('Google authorization expired. Connect with Google again.');assert.equal(reloaded.lastAccount(),'fixture@example.com');
+ reloaded.forget();assert.equal(load().lastAccount(),'');
+ for(const name of ['production-support','koha-support','uat-observations']){const html=fs.readFileSync(path.join(root,'site',name,'index.html'),'utf8');assert.ok(html.includes("{prompt:'',login_hint:hint}"));assert.ok(html.includes("$('settings-connect').onclick=()=>connectGoogle(true)"));assert.ok(html.includes('function disconnectGoogle(){window.SomaiyaSession?.forget?.();'));}
+ assert.ok(fs.readFileSync(path.join(root,'site/index.html'),'utf8').includes('SomaiyaSession?.forget?.()'));
+ console.log('Passed: one-click reconnect remembers only the account email, survives expiry, and Disconnect forgets it.');
+}

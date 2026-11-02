@@ -113,9 +113,9 @@ https://www.googleapis.com/auth/userinfo.email
 
 `site/config.js` holds the public OAuth client ID. This static version uses no client secret, service-account key, backend callback, or refresh-token store.
 
-Authorization stays in shared browser memory. Embedded dashboards use the portal's session owner; SharedWorker and BroadcastChannel support other active pages and recovery. Reload can recover a connection while another connected hub/tab remains open. Closing all hub/dashboard contexts ends the in-memory session. Google authorization expiry requires reconnecting.
+Authorization stays in shared browser memory. Embedded dashboards use the portal's session owner; SharedWorker and BroadcastChannel support other active pages and recovery. Reload can recover a connection while another connected hub/tab remains open. Closing all hub/dashboard contexts ends the in-memory session. Google authorization expiry requires reconnecting. After a reload or expiry, the header button reads **Reconnect** and signs in again as the last account with one click, without the account chooser when Google still holds the grant; **Connect with Google** under Sheet connection always offers the chooser. Google still needs that click, so reconnect is not automatic.
 
-Tokens and fetched responses are not persisted in browser storage, source control, URLs, logs, or static JSON. User-requested report exports contain report data, not credentials. Never commit tokens, credential JSON, private keys, real spreadsheet responses, or screenshots containing private issue data.
+Tokens and fetched responses are not persisted in browser storage (only the last connected account email is kept in localStorage for Reconnect, and Disconnect removes it), source control, URLs, logs, or static JSON. User-requested report exports contain report data, not credentials. Never commit tokens, credential JSON, private keys, real spreadsheet responses, or screenshots containing private issue data.
 
 The repository and Pages shell are public. Private data is read directly from Google after authorization; sheet permissions and Workspace policies govern access. The public shell does not provide private-site authentication.
 
@@ -162,7 +162,7 @@ tests/
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-10-19-2`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-02-1`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 
