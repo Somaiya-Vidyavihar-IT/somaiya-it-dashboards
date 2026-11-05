@@ -4,8 +4,10 @@
   python -m netmon [--config PATH] reach
   python -m netmon [--config PATH] serve [--dev-http]
   python -m netmon [--config PATH] capture --ip 10.0.0.1 [--platform auto|cisco_ios|cisco_nxos|cisco_s300] | --wlc 10.0.0.5
-  python -m netmon [--config PATH] set-password switch|wlc
+  python -m netmon [--config PATH] set-password switch --set NAME | wlc
   python -m netmon [--config PATH] check-config
+  python -m netmon [--config PATH] make-cert --host netmon.somaiya.edu [--ip VM_IP]
+  python -m netmon [--config PATH] import-pfx wildcard.pfx
 """
 import argparse
 import getpass
@@ -31,14 +33,23 @@ def main(argv=None):
     g.add_argument("--ip")
     g.add_argument("--wlc")
     c.add_argument("--platform", default="auto", choices=sorted(config_mod.PLATFORMS))
+    c.add_argument("--set", dest="cred_set", default="", help="switch credential set to use (default: try each)")
     p = sub.add_parser("set-password", help="store a password in Windows Credential Manager")
     p.add_argument("kind", choices=["switch", "wlc"])
+    p.add_argument("--set", dest="cred_set", default="", help="switch credential set name from config.toml")
     sub.add_parser("check-config", help="validate config.toml and credentials")
     x = sub.add_parser("import-pfx", help="convert the wildcard certificate (.pfx) to the PEM files in config.toml")
     x.add_argument("pfx")
+    m = sub.add_parser("make-cert", help="create a self-signed certificate for the API (until a trusted one is used)")
+    m.add_argument("--host", required=True, help="DNS name users open, e.g. netmon.somaiya.edu")
+    m.add_argument("--ip", action="append", default=[], help="also valid for this IP address (repeatable)")
     args = ap.parse_args(argv)
 
-    cfg = config_mod.load(args.config)
+    try:
+        cfg = config_mod.load(args.config)
+    except config_mod.ConfigError as exc:
+        print(f"Config problem: {exc}", file=sys.stderr)
+        return 2
     data_dir = cfg["collector"]["data_dir"]
     os.makedirs(os.path.join(data_dir, "logs"), exist_ok=True)
     logging.basicConfig(
@@ -63,23 +74,66 @@ def main(argv=None):
         return _capture(cfg, args)
     if args.cmd == "set-password":
         from . import creds
-        pw = getpass.getpass(f"{args.kind} password: ")
-        user = creds.store(cfg, args.kind, pw)
-        print(f"Stored {args.kind} password for user {user} in Windows Credential Manager.")
+        if args.kind == "switch" and not args.cred_set:
+            names = ", ".join(s["name"] for s in cfg["collector"]["switch_credential_sets"])
+            raise SystemExit(f"Add --set NAME. Configured switch credential sets: {names}")
+        label = f"switch set '{args.cred_set}'" if args.kind == "switch" else "WLC"
+        pw = getpass.getpass(f"Password for {label} (typing is hidden): ")
+        if not pw or pw != getpass.getpass("Type it again: "):
+            raise SystemExit("Passwords were empty or did not match; nothing stored.")
+        user = creds.store(cfg, args.kind, pw, args.cred_set or None)
+        print(f"Stored the {label} password for user {user} in Windows Credential Manager.")
         return 0
+    if args.cmd == "make-cert":
+        return _make_cert(cfg, args.host, args.ip)
     if args.cmd == "import-pfx":
         return _import_pfx(cfg, args.pfx)
     if args.cmd == "check-config":
         from . import creds
         print(f"Config OK: {len(cfg['subnets'])} subnets, {len(cfg['wlc']['hosts'])} WLCs, "
               f"{len(cfg['server']['network_team'])} network-team emails")
-        for kind in ("switch",) + (("wlc",) if cfg["wlc"]["hosts"] else ()):
-            try:
-                creds.get(cfg, kind)
-                print(f"{kind} credentials: found")
-            except creds.CredentialError as exc:
-                print(f"{kind} credentials: MISSING - {exc}")
-        return 0
+        missing = 0
+        for label, user, stored in creds.status(cfg):
+            print(f"  {label:20} user {user or '(none)':20} password {'stored' if stored else 'MISSING'}")
+            missing += not stored
+        if not cfg["collector"]["seeds"] and not any(s["sweep"] for s in cfg["subnets"]):
+            print("  WARNING: collector.seeds is empty; with sweep = false nothing will be discovered.")
+        for f in (cfg["server"]["cert_file"], cfg["server"]["key_file"]):
+            print(f"  {'found  ' if f and os.path.exists(f) else 'MISSING'} {f or '(not set)'}")
+        return 1 if missing else 0
+
+
+def _make_cert(cfg, host, ips):
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+    cert_file, key_file = cfg["server"]["cert_file"], cfg["server"]["key_file"]
+    if not cert_file or not key_file:
+        raise SystemExit("Set server.cert_file and server.key_file in config.toml first")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host),
+                      x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Somaiya Vidyavihar IT (netmon self-signed)")])
+    alt = [x509.DNSName(host)] + [x509.IPAddress(ipaddress.ip_address(i)) for i in ips]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(days=397))  # browsers reject longer server certs
+            .add_extension(x509.SubjectAlternativeName(alt), critical=False)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(key, hashes.SHA256()))
+    os.makedirs(os.path.dirname(cert_file), exist_ok=True)
+    with open(cert_file, "wb") as fh:
+        fh.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(key_file, "wb") as fh:
+        fh.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                   serialization.NoEncryption()))
+    print(f"Self-signed certificate for {host} written to {cert_file}, valid until {cert.not_valid_after_utc:%Y-%m-%d}.")
+    print("Each team member opens https://" + host + ":" + str(cfg["server"]["port"]) + "/api/v1/health once and accepts the warning.")
+    return 0
 
 
 def _import_pfx(cfg, pfx_path):
@@ -110,14 +164,31 @@ def _capture(cfg, args):
     store = Store(cfg["collector"]["data_dir"])
     raw = {}
     if args.wlc:
-        user, pw = creds.get(cfg, "wlc")
+        user, pw = creds.get(cfg)
         rec = wlc.collect(args.wlc, user, pw, cfg, raw_sink=raw)
         target, platform = args.wlc, "aruba_os"
     else:
-        user, pw = creds.get(cfg, "switch")
-        platform = args.platform if args.platform != "auto" else devices.detect_platform(args.ip, user, pw, cfg)
-        rec = devices.collect(args.ip, platform, user, pw, cfg, raw_sink=raw)
-        target = args.ip
+        sets = [s for s in creds.switch_sets(cfg) if not args.cred_set or s[0] == args.cred_set]
+        if not sets:
+            raise SystemExit(f"No stored password for credential set {args.cred_set!r}")
+        target, platform, rec = args.ip, args.platform, None
+        for name, user, pw in sets:
+            raw.clear()
+            try:
+                platform = args.platform if args.platform != "auto" else devices.detect_platform(args.ip, user, pw, cfg)
+            except Exception as exc:
+                if devices._short_error(exc) == devices.AUTH_FAILED:
+                    print(f"Credential set {name}: authentication failed, trying the next one")
+                    continue
+                raise SystemExit(f"Could not log in to {args.ip}: {devices._short_error(exc)}")
+            rec = devices.collect(args.ip, platform, user, pw, cfg, raw_sink=raw)
+            if rec["error"] == devices.AUTH_FAILED:
+                print(f"Credential set {name}: authentication failed, trying the next one")
+                continue
+            print(f"Logged in with credential set {name} as {platform}")
+            break
+        if rec is None or rec["error"] == devices.AUTH_FAILED:
+            raise SystemExit(f"Authentication failed on {args.ip} with every credential set")
     path = store.path("captures", f"capture-{target}-{stamp()}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(f"# netmon capture {target} platform={platform}\n# Contains real device output: keep it out of git.\n")

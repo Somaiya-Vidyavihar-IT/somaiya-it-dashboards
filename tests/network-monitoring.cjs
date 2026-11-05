@@ -55,7 +55,7 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  assert.ok(h.el('ap-rows').innerHTML.includes('CNTEST0001')&&h.el('ap-rows').innerHTML.includes('Not up')===false);
  assert.ok(h.el('topo').innerHTML.includes('core-01')&&h.el('topo').innerHTML.includes('Not linked to the core'));
  assert.ok(h.el('port-rows').innerHTML.includes('Gi1/0/9'));assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
- assert.equal(h.el('run-now').hidden,false,'Run now shown to the IT Network Team');
+ assert.equal(h.el('run-now').hidden,false,'Run now shown to the IT Network Team');assert.equal(h.el('cert-help').hidden,true,'No certificate help once the API answers');
  assert.ok(h.el('data-note').textContent.includes('Last full run'));
  vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",h.ctx);assert.ok(h.el('sw-count').textContent.startsWith('1 of 3'));
  vm.runInContext("document.getElementById('ap-state').value='down';renderAps()",h.ctx);assert.ok(h.el('ap-rows').innerHTML.includes('ap-hall-09')&&!h.el('ap-rows').innerHTML.includes('ap-lib-01'));
@@ -70,6 +70,7 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
 
  // Off campus: the API cannot be reached.
  h=harness(API,()=>new TypeError('Failed to fetch'));await h.connect();assert.ok(h.el('data-note').textContent.includes('only on the campus network'));
+ assert.equal(h.el('cert-help').hidden,false,'Self-signed certificate help shown when the API cannot be reached');assert.equal(h.el('cert-link').href,API+'/api/v1/health');
 
  // Google token rejected by the API: treated as expiry.
  h=harness(API,()=>({status:401,body:{error:'Google authorization is invalid or expired. Connect with Google again.'}}));await h.connect();

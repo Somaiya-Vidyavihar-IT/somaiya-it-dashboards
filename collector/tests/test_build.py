@@ -162,6 +162,16 @@ class Config(unittest.TestCase):
         with self.assertRaises(config.ConfigError):
             config.validate({"collector": {}, "subnets": [{"cidr": "10.0.0.0/24"}]})
 
+    def test_credential_sets(self):
+        cfg = config.validate({"collector": {"switch_username": "legacy"}, "subnets": [{"cidr": "10.0.0.0/24"}]})
+        self.assertEqual(cfg["collector"]["switch_credential_sets"], [{"name": "default", "username": "legacy"}])
+        with self.assertRaises(config.ConfigError):
+            config.validate({"collector": {"switch_credential_sets": [{"name": "a", "username": "x"}, {"name": "a", "username": "y"}]},
+                             "subnets": [{"cidr": "10.0.0.0/24"}]})
+        with self.assertRaises(config.ConfigError):
+            config.validate({"collector": {"switch_credential_sets": [{"name": "bad name", "username": "x"}]},
+                             "subnets": [{"cidr": "10.0.0.0/24"}]})
+
     def test_example_config_parses(self):
         import tomllib
         path = os.path.join(os.path.dirname(__file__), "..", "config.example.toml")
@@ -169,6 +179,7 @@ class Config(unittest.TestCase):
             cfg = config.validate(tomllib.load(fh))
         self.assertEqual(cfg["subnets"][0]["cidr"], "10.255.0.0/23")
         self.assertEqual(len(list(__import__("netmon.scan").scan.sweep_targets(cfg))), 510)
+        self.assertEqual([s["name"] for s in cfg["collector"]["switch_credential_sets"]], ["set1", "set2", "set3"])
 
 
 if __name__ == "__main__":

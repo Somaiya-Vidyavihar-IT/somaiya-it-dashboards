@@ -5,6 +5,7 @@ import re
 from . import parse
 
 log = logging.getLogger("netmon.devices")
+AUTH_FAILED = "SSH authentication failed"
 
 # (key, command, use TextFSM). Every command must be a read-only show command.
 COMMANDS = {
@@ -148,7 +149,7 @@ def _short_error(exc):
     msg = text[0] if text else exc.__class__.__name__
     name = exc.__class__.__name__
     if "Authentication" in name:
-        return "SSH authentication failed"
+        return AUTH_FAILED
     if "Timeout" in name:
         return "SSH timed out"
     return f"{name}: {msg}"[:200]

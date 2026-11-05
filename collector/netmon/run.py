@@ -56,8 +56,12 @@ def _copy(src, dst):
 
 def _discover(cfg, store, trigger, by, started):
     col = cfg["collector"]
-    username, password = creds.get(cfg, "switch")
+    sets = creds.switch_sets(cfg)
+    by_name = {s[0]: s for s in sets}
     platforms = store.read("state", "platforms.json", default={}) or {}
+    # Which credential set worked per switch (set names only, never passwords), so later runs
+    # log in first time and do not generate repeated failed logins against TACACS+.
+    cred_of = store.read("state", "credentials.json", default={}) or {}
 
     # 1. IP range scanner: TCP 22 over sweep-enabled subnets, plus seeds and last run's devices.
     targets = list(scan.sweep_targets(cfg))
@@ -74,16 +78,30 @@ def _discover(cfg, store, trigger, by, started):
     store.status(phase="ssh", done=0, total=len(open_ips))
 
     def work(ip):
-        platform = platforms.get(ip) or (config_mod.subnet_for(cfg, ip) or {}).get("platform", "auto")
-        if platform == "auto":
-            try:
-                platform = devices.detect_platform(ip, username, password, cfg)
-            except Exception as exc:
-                return {"ip": ip, "ok": False, "error": devices._short_error(exc), "platform": "", "neighbors": [],
-                        "ports": [], "warnings": []}
-        rec = devices.collect(ip, platform, username, password, cfg)
-        if rec["ok"]:
-            platforms[ip] = platform
+        known_set = cred_of.get(ip)
+        order = ([by_name[known_set]] if known_set in by_name else []) + [s for s in sets if s[0] != known_set]
+        rec = None
+        for name, username, password in order:
+            platform = platforms.get(ip) or (config_mod.subnet_for(cfg, ip) or {}).get("platform", "auto")
+            if platform == "auto":
+                try:
+                    platform = devices.detect_platform(ip, username, password, cfg)
+                except Exception as exc:
+                    rec = {"ip": ip, "ok": False, "error": devices._short_error(exc), "platform": "", "neighbors": [],
+                           "ports": [], "warnings": []}
+                    if rec["error"] == devices.AUTH_FAILED:
+                        continue  # try the next credential set
+                    return rec
+            rec = devices.collect(ip, platform, username, password, cfg)
+            if rec["ok"]:
+                platforms[ip] = platform
+                cred_of[ip] = name
+                rec["credentialSet"] = name
+                return rec
+            if rec["error"] != devices.AUTH_FAILED:
+                return rec
+        rec["error"] = f"SSH authentication failed with all {len(order)} credential sets"
+        cred_of.pop(ip, None)
         return rec
 
     with ThreadPoolExecutor(max_workers=col["ssh_workers"]) as pool:
@@ -111,13 +129,14 @@ def _discover(cfg, store, trigger, by, started):
                             pending.add(pool.submit(work, ip))
             store.status(done=len(records), total=len(records) + len(pending))
     store.write(platforms, "state", "platforms.json")
+    store.write(cred_of, "state", "credentials.json")
     scan_info["collected"] = sum(r["ok"] for r in records)
 
     # Aruba WLCs.
     wlcs = []
     if cfg["wlc"]["hosts"]:
         store.status(phase="wlc")
-        wuser, wpass = creds.get(cfg, "wlc")
+        wuser, wpass = creds.get(cfg)
         wlcs = [wlc.collect(h, wuser, wpass, cfg) for h in cfg["wlc"]["hosts"]]
 
     # 6. Report generation.

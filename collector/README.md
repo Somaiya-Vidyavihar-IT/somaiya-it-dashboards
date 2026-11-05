@@ -19,47 +19,49 @@ Nothing here writes to devices. Every command is asserted at import time to star
 
 ## Install on the collector host (Windows 10/11 or Windows Server)
 
-Run these as an administrator unless noted. `<…>` values are placeholders.
+A plain-language, step-by-step guide for the network team is kept in the network project (`network/runbooks/netmon-vm-setup.md`). Short version, in an elevated PowerShell. `<…>` values are placeholders.
 
-1. **Service account.** Create a local or domain account (e.g. `svc-netmon`) with no interactive logon rights beyond "Log on as a batch job". Everything below runs as this account.
-2. **Python 3.13 (64-bit)** from python.org, installed for all users. Then:
+1. **Service account.** Create a local account such as `svc-netmon` (Computer Management → Local Users). It runs the scheduled tasks and owns the stored passwords.
+2. **Python 3.13 (64-bit)** from python.org, installed for all users.
+3. **Install the collector.** Download this repository, then run from `collector\deploy`:
    ```powershell
-   mkdir C:\netmon\app, C:\netmon\tls
-   # copy this repository's collector\ folder to C:\netmon\app\collector
-   py -3.13 -m venv C:\netmon\venv
-   C:\netmon\venv\Scripts\pip install -r C:\netmon\app\collector\requirements.txt
+   powershell -ExecutionPolicy Bypass -File .\setup-host.ps1 -ServiceAccount '<VM_NAME>\svc-netmon'
    ```
-3. **Config.** Copy `config.example.toml` to `C:\netmon\config.toml` and fill in the subnets (each tagged with its institute), WLC IPs, `switch_username` / `wlc_username`, the `network_team` emails and the certificate paths. Keep the file out of git.
-4. **Passwords** go into Windows Credential Manager. Run these as the service account (`runas /user:<SERVICE_ACCOUNT> powershell`):
+   This creates `C:\netmon` (code, Python packages, `config.toml` if missing, and the `C:\netmon\netmon` command) and restricts the folder to Administrators, SYSTEM and the service account.
+4. **Config.** Edit `C:\netmon\config.toml`: subnets with institutes (`sweep = false` for whole institute ranges, plus the Nexus core IPs as `seeds`), switch credential set names and usernames, WLC IPs and username, and the `network_team` emails. Keep Windows paths in single quotes.
+5. **Passwords** go into Windows Credential Manager under the service account (`runas /user:<VM_NAME>\svc-netmon powershell`):
    ```powershell
-   cd C:\netmon\app\collector
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml set-password switch
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml set-password wlc
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml check-config
+   C:\netmon\netmon set-password switch --set set1     # repeat for set2, set3
+   C:\netmon\netmon set-password wlc
+   C:\netmon\netmon check-config
    ```
-5. **Certificate.** Convert the wildcard `.pfx` into the PEM files named in the config, then restrict the key to the service account:
+6. **Certificate.** Either a self-signed certificate (each team member accepts a browser warning once):
    ```powershell
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml import-pfx <PATH_TO_WILDCARD>.pfx
-   icacls C:\netmon\tls\key.pem /inheritance:r /grant:r "<SERVICE_ACCOUNT>:R" "Administrators:F"
+   C:\netmon\netmon make-cert --host netmon.somaiya.edu
    ```
-6. **DNS:** an internal record such as `netmon.<wildcard-domain>` pointing to this host. The name must be covered by the wildcard certificate.
-7. **Firewall.** Allow the API port only from IT staff subnets:
+   or a trusted wildcard certificate later: `C:\netmon\netmon import-pfx <PATH>.pfx`. Restart `netmon-api` after changing it.
+7. **DNS:** an internal A record `netmon.somaiya.edu` → this VM.
+8. **Firewall.** Allow the API port only from IT staff subnets:
    ```powershell
    New-NetFirewallRule -DisplayName "netmon API" -Direction Inbound -Protocol TCP -LocalPort 8443 -RemoteAddress <IT_STAFF_SUBNETS> -Action Allow
    ```
-8. **Validate parsers on real gear before go-live.** For one device of each model, run a capture. It is read-only and saves raw output under `data\captures`, which must stay out of git:
+9. **Validate the parsers on real gear before go-live.** Capture one device of each model and each WLC. This is read-only and the output is saved under `data\captures` (never commit it):
    ```powershell
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml capture --ip <SWITCH_IP>
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml capture --wlc <WLC_IP>
+   C:\netmon\netmon capture --ip <SWITCH_IP>
+   C:\netmon\netmon capture --wlc <WLC_IP>
    ```
-   Check the parsed summary it prints: hostname, model, serial, neighbours, PoE and CPU. The SG/CBS/C1300 CDP, PoE and CPU parsers and the Aruba `show ap active` / `show ap lldp neighbors` parsers are tolerant custom parsers. Confirm them first.
-9. **First run and tasks.**
-   ```powershell
-   C:\netmon\venv\Scripts\python -m netmon --config C:\netmon\config.toml run
-   .\deploy\install-tasks.ps1 -ServiceAccount '<SERVICE_ACCOUNT>'
-   Start-ScheduledTask -TaskName netmon-api
-   ```
-10. **Hub.** Set `netmonApiBase` in `site/config.js` to `https://netmon.<wildcard-domain>:8443` and publish the hub as usual (`dev` first).
+   Check the printed summary: hostname, model, serial, neighbours, PoE and CPU. The SG/CBS/C1300 CDP, PoE and CPU parsers and the Aruba `show ap active` / `show ap lldp neighbors` parsers are tolerant custom parsers, so confirm them first.
+10. **First run and scheduled tasks.**
+    ```powershell
+    C:\netmon\netmon run
+    .\install-tasks.ps1 -ServiceAccount '<VM_NAME>\svc-netmon'
+    Start-ScheduledTask -TaskName netmon-api
+    ```
+11. **Hub.** Set `netmonApiBase` in `site/config.js` to `https://netmon.somaiya.edu:8443` and publish (`dev` first).
+
+### Credential sets
+
+Switches can use several read-only accounts. `switch_credential_sets` lists them in the order to try. For each switch the collector tries the set that worked last time first, then the others, and remembers the winner in `data\state\credentials.json` (set names only). A switch where every set fails is shown as "SSH authentication failed with all N credential sets". A new switch costs at most N−1 failed logins, once.
 
 ## Access control
 

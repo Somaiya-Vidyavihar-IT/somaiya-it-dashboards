@@ -16,9 +16,18 @@ def load(path=None):
     path = path or DEFAULT_CONFIG
     try:
         with open(path, "rb") as fh:
-            raw = tomllib.load(fh)
+            text = fh.read().decode("utf-8-sig")  # Notepad / PowerShell 5.1 may add a UTF-8 BOM
     except FileNotFoundError:
         raise ConfigError(f"Config file not found: {path}. Copy config.example.toml and edit it.")
+    except UnicodeDecodeError:
+        raise ConfigError(f"{path} is not UTF-8 text. Save it in Notepad with Encoding: UTF-8.")
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        hint = ""
+        if "escape" in str(exc).lower():
+            hint = " Windows paths must use single quotes, e.g. data_dir = 'C:\\netmon\\data'."
+        raise ConfigError(f"{path} has a mistake: {exc}.{hint}")
     cfg = validate(raw)
     cfg["_path"] = os.path.abspath(path)
     return cfg
@@ -42,8 +51,20 @@ def validate(raw):
     col.setdefault("seeds", [])
     col.setdefault("exclude", [])
     col.setdefault("aruba_ouis", [])
-    if not col["switch_username"]:
-        raise ConfigError("collector.switch_username is required")
+    sets = list(col.get("switch_credential_sets") or [])
+    if not sets and col["switch_username"]:
+        sets = [{"name": "default", "username": col["switch_username"]}]
+    if not sets:
+        raise ConfigError("Define collector.switch_credential_sets (or collector.switch_username)")
+    names = set()
+    for i, s in enumerate(sets):
+        name, user = str(s.get("name", "")).strip(), str(s.get("username", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name) or name in names:
+            raise ConfigError(f"switch_credential_sets[{i}].name must be unique letters, digits, _ or -")
+        if not user:
+            raise ConfigError(f"switch_credential_sets[{i}].username is required")
+        names.add(name)
+    col["switch_credential_sets"] = [{"name": str(s["name"]).strip(), "username": str(s["username"]).strip()} for s in sets]
     for key in ("ssh_workers", "scan_concurrency", "keep_days"):
         if not isinstance(col[key], int) or col[key] < 1:
             raise ConfigError(f"collector.{key} must be a positive integer")
@@ -75,14 +96,15 @@ def validate(raw):
         raise ConfigError("At least one [[subnets]] entry is required")
     # Most specific subnet wins when ranges overlap.
     subnets.sort(key=lambda s: s["net"].prefixlen, reverse=True)
-    col["exclude_nets"] = [ipaddress.ip_network(x, strict=False) for x in col["exclude"]]
-    for seed in col["seeds"]:
-        ipaddress.ip_address(seed)
+    try:
+        col["exclude_nets"] = [ipaddress.ip_network(x, strict=False) for x in col["exclude"]]
+    except ValueError as exc:
+        raise ConfigError(f"collector.exclude has an invalid subnet: {exc}")
+    _check_ips(col["seeds"], "collector.seeds (the Nexus core management IPs)")
 
     wlc = dict(raw.get("wlc", {}))
     wlc.setdefault("hosts", [])
-    for host in wlc["hosts"]:
-        ipaddress.ip_address(host)
+    _check_ips(wlc["hosts"], "wlc.hosts")
 
     srv = dict(raw.get("server", {}))
     srv.setdefault("host", "0.0.0.0")
@@ -97,6 +119,14 @@ def validate(raw):
     srv["network_team"] = sorted({e.strip().lower() for e in srv["network_team"] if e.strip()})
     srv["allowed_domains"] = [d.strip().lower() for d in srv["allowed_domains"] if d.strip()]
     return {"collector": col, "subnets": subnets, "wlc": wlc, "server": srv}
+
+
+def _check_ips(values, where):
+    for value in values:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            raise ConfigError(f"{where}: {value!r} is not an IP address. Replace the <...> placeholder.")
 
 
 def subnet_for(cfg, ip):

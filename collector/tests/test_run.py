@@ -38,7 +38,8 @@ class FullRunOrchestration(unittest.TestCase):
             return self.records[ip]
 
         with mock.patch("netmon.scan.probe", side_effect=probe), \
-                mock.patch("netmon.creds.get", return_value=("u", "p")), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.creds.get", return_value=("nms", "p")), \
                 mock.patch("netmon.devices.detect_platform", side_effect=lambda ip, *a: self.records[ip]["platform"]), \
                 mock.patch("netmon.devices.collect", side_effect=collect), \
                 mock.patch("netmon.wlc.collect", return_value=WLC[0]):
@@ -67,6 +68,35 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertFalse(reach["results"]["10.0.1.1"]["up"])
         self.assertEqual(reach["results"]["10.0.0.1"]["latencyMs"], 1.2)
 
+    def test_credential_sets_tried_in_order_and_remembered(self):
+        logins = []
+
+        def detect(ip, user, pw, cfg):
+            logins.append((ip, user))
+            if user != "new-user" or ip == "10.0.0.2":
+                raise type("NetmikoAuthenticationException", (Exception,), {})("auth failed")
+            return self.records[ip]["platform"]
+
+        sets = [("old", "old-user", "p1"), ("new", "new-user", "p2"), ("spare", "spare-user", "p3")]
+        cfg = config.validate({"collector": {"switch_credential_sets": [{"name": n, "username": u} for n, u, _ in sets],
+                                             "data_dir": self.tmp.name, "seeds": ["10.0.0.1", "10.0.0.2"]},
+                               "subnets": [{"cidr": "10.0.0.0/30", "sweep": False}]})
+        core_only = dict(self.records["10.0.0.1"], neighbors=[])
+        with mock.patch("netmon.scan.probe", side_effect=lambda ips, *a: {ip: 1.0 for ip in ips}), \
+                mock.patch("netmon.creds.switch_sets", return_value=sets), \
+                mock.patch("netmon.devices.detect_platform", side_effect=detect), \
+                mock.patch("netmon.devices.collect", return_value=core_only):
+            self.assertEqual(run.full_run(cfg), 0)
+            self.assertEqual([u for ip, u in logins if ip == "10.0.0.1"], ["old-user", "new-user"])
+            store = Store(self.tmp.name)
+            self.assertEqual(store.read("state", "credentials.json"), {"10.0.0.1": "new"})
+            failed = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.0.2")
+            self.assertEqual(failed["error"], "SSH authentication failed with all 3 credential sets")
+            logins.clear()
+            os.remove(store.path("state", "platforms.json"))  # force a fresh login on the next run
+            self.assertEqual(run.full_run(cfg), 0)
+            self.assertEqual([u for ip, u in logins if ip == "10.0.0.1"], ["new-user"], "remembered set is tried first")
+
     def test_second_run_refused_while_locked(self):
         store = Store(self.tmp.name)
         self.assertTrue(store.acquire({"trigger": "scheduled"}))
@@ -75,7 +105,7 @@ class FullRunOrchestration(unittest.TestCase):
 
     def test_failure_is_recorded_and_lock_released(self):
         with mock.patch("netmon.scan.probe", side_effect=RuntimeError("socket boom")), \
-                mock.patch("netmon.creds.get", return_value=("u", "p")):
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]):
             self.assertEqual(run.full_run(self.cfg), 1)
         store = Store(self.tmp.name)
         self.assertEqual(store.read("run-status.json")["state"], "failed")

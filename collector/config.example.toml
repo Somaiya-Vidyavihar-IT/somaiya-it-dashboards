@@ -1,12 +1,19 @@
 # netmon configuration. Copy to C:\netmon\config.toml on the collector host and edit.
 # Never commit the real file: it names internal subnets, hosts and people.
-# Passwords are NOT stored here. Use:  python -m netmon set-password switch   (and: wlc)
+# Passwords are NOT stored here. On the collector host run, as the service account:
+#   netmon set-password switch --set set1     (once per switch credential set)
+#   netmon set-password wlc
 
 [collector]
 data_dir = 'C:\netmon\data'
 credential_service = "netmon"
-switch_username = "<READ_ONLY_SSH_USER>"
-wlc_username = "<READ_ONLY_WLC_USER>"     # blank = same as switch_username
+# Switch logins are tried in this order; the set that works is remembered per switch.
+switch_credential_sets = [
+  { name = "set1", username = "<SWITCH_USER_1>" },
+  { name = "set2", username = "<SWITCH_USER_2>" },
+  { name = "set3", username = "<SWITCH_USER_3>" },
+]
+wlc_username = "<READ_ONLY_WLC_USER>"
 ssh_workers = 20                          # parallel SSH sessions
 scan_concurrency = 512                    # parallel TCP/22 probes during the sweep
 connect_timeout = 1.5                     # seconds per TCP/22 probe
