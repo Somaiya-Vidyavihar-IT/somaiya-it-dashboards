@@ -166,6 +166,120 @@ ap-hall-09  campus   303      10.60.0.19   Down          N      10.0.0.5     0.0
 Total APs:2
 """
 
+# ---- SG/CBS/C1300 layouts as seen live on 2026-11-05 (invented names, addresses and serials) ----
+
+SG300_VERSION = """
+SW version    1.4.11.5 ( date  08-Apr-2020 time  13:49:34 )
+Boot version    1.3.5.06 ( date  21-Jul-2013 time  15:12:10 )
+HW version    V02
+"""
+
+CBS_VERSION = """
+Active-image: flash://system/images/image1.bin
+  Version: 3.2.1.1
+  MD5 Digest: 00000000000000000000000000000000
+  Date: 13-Feb-2023
+Inactive-image: flash://system/images/_image1.bin
+  Version: 3.1.0.57
+"""
+
+CBS_SYSTEM = """
+System Description:                       CBS350-24FP-4G 24-Port Gigabit PoE Managed Switch
+System Up Time (days,hour:min:sec):       86,05:32:10
+System Contact:
+System Name:                              asw-test-cbs
+System Location:
+System MAC Address:                       40:14:82:00:00:78
+System Object ID:                         1.3.6.1.4.1.9.6.1.1004.28.6
+
+Unit          Type
+---- ----------------------
+ 1       CBS350-24FP-4G
+"""
+
+SG300_SYSTEM_ID = """
+Serial number : DNITEST0001
+"""
+
+CBS_SYSTEM_ID = """
+       Unit            Serial number
+------------------- -------------------
+         1              FOCTEST0002
+"""
+
+SX_CDP_DETAIL_REAL = """
+---------------------------------------------
+Device-ID: 007e95000001
+Advertisement version: 2
+Platform: Cisco SG350-28P (PID:SG350-28P-K9)-VSD
+Capabilities: Router Switch IGMP
+Interface: gi21, Port ID (outgoing port): gi26
+Holdtime: 130
+Version: 2.5.9.54
+Duplex: full
+Native VLAN: 1
+SysName: switch000001
+SysObjectID: 0.0
+Addresses:
+          IP 10.0.19.85
+          IPv6 fe80::27e:95ff:fe00:1 (link-local)
+---------------------------------------------
+Device-ID: dsw-test-c1000.example.local
+Advertisement version: 2
+Platform: cisco C1000-24FP-4X-L
+Capabilities: Switch IGMP
+Interface: gi23, Port ID (outgoing port): GigabitEthernet1/0/10
+Holdtime: 161
+Version: Cisco IOS Software, C1000 Software (C1000-UNIVERSALK9-M), Version 15.2(7)E6, RELEASE SOFTWARE (fc2)
+Technical Support: http://www.cisco.com/techsupport
+Copyri
+Duplex: full
+Native VLAN: 19
+SysObjectID: 0.0
+Primary Management Address: IP 10.0.19.5,
+Addresses:
+          IP 10.0.19.5
+"""
+
+SX_LLDP_SUMMARY_REAL = """
+System capability legend:
+B - Bridge; R - Router; W - Wlan Access Point; T - telephone;
+D - DOCSIS Cable Device; H - Host; r - Repeater;
+TP - Two Ports MAC Relay; S - S-VLAN; C - C-VLAN; O - Other
+
+  Port        Device ID        Port ID       System Name    Capabilities  TTL
+--------- ----------------- ------------- ----------------- ------------ -----
+gi16      d8:cb:8a:00:12:10 d8:cb:8a:00:1                        O       2791
+                            2:10
+gi21      00:7e:95:00:00:01     gi26        switch000001        B, R      99
+gi24      f0:5c:19:00:b0:fc f0:5c:19:00:b LAB_2ndFloor_Staf      W        117
+                            0:fc          fRoom
+gi25      00:8e:73:00:a0:ab     gi25      asw-test-2ND-CLS1     B, R      119
+                                          -AS02-SG350
+gi27      b0:00:b4:00:00:29     gi49        switch000029         B        100
+
+"""
+
+CBS_POE = """
+
+Power-limit mode: Class based
+Usage threshold: 95%
+
+Unit Module           Nominal   Consumed     Temp     SW            PSE chipset
+                      Power (W) Power (W)    (C)      Version       HW Revision
+---- ---------------- --------- ------------ -------- ------------- -----------------
+1    CBS350-24FP-4G   370       183 (49%)    64       0.2.0.34       TPS2388 - 0x40C4
+                                                                     TPS2388 - 0x40C4
+
+
+Interface    Admin       Oper         Power (W)     Class     Device     Priority
+---------- ---------- ----------- ----------------- ----- -------------- --------
+gi1        Auto       Fault       0.0               -                    low
+gi3        Auto       On          10.138 (25.5)     4                    low
+gi12       Auto       On          0.798             0                    low
+gi14       Auto       Searching   0.0               -                    low
+"""
+
 # Real AOS 8 layout (2026-11-05 capture), invented values: "Neighbor" is an index, the switch is
 # "Chassis Name/ID", and "Not received" marks fields the switch did not send.
 ARUBA_AP_LLDP = """AP LLDP Neighbors (Updated every 60 seconds)

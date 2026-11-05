@@ -75,6 +75,37 @@ class CustomParsers(unittest.TestCase):
                                 "ap-hall-07": {"switch": "asw-test-03-SG300", "switchIp": "", "port": "Gi22"}},
                          "switch comes from 'Chassis Name/ID', never the 'Neighbor' index; 'Not received' is blank")
 
+    def test_sx_cdp_real_format_gives_ips(self):
+        """Regression (live SG/CBS captures): 65 switch neighbours had no IP because SG/CBS print
+        'Addresses: / IP x' and 'Primary Management Address: IP x,' rather than 'IP address: x'."""
+        rows = {n["localPort"]: n for n in parse.cdp_detail_text(fx.SX_CDP_DETAIL_REAL)}
+        self.assertEqual((rows["Gi21"]["name"], rows["Gi21"]["ip"], rows["Gi21"]["chassis"]),
+                         ("switch000001", "10.0.19.85", "00:7e:95:00:00:01"), "SysName used when Device-ID is a MAC")
+        self.assertEqual((rows["Gi23"]["ip"], rows["Gi23"]["remotePort"]), ("10.0.19.5", "Gi1/0/10"))
+
+    def test_sx_lldp_summary_wraps_and_capabilities(self):
+        from netmon import build
+        rows = {n["localPort"]: n for n in parse.lldp_summary_sx(fx.SX_LLDP_SUMMARY_REAL)}
+        self.assertEqual(sorted(rows), ["Gi16", "Gi21", "Gi24", "Gi25", "Gi27"], "a wrapped '-…' line must not end the table")
+        self.assertEqual(rows["Gi25"]["name"], "asw-test-2ND-CLS1-AS02-SG350")
+        self.assertEqual(rows["Gi24"]["name"], "LAB_2ndFloor_StaffRoom")
+        self.assertEqual(rows["Gi16"]["remotePort"], "d8:cb:8a:00:12:10")
+        self.assertEqual({p: build.neighbor_kind(n) for p, n in rows.items()},
+                         {"Gi16": "other", "Gi21": "switch", "Gi24": "ap", "Gi25": "switch", "Gi27": "switch"})
+
+    def test_sx_identity_both_firmware_families(self):
+        sg = parse.version_sx([], [], [], fx.SG300_VERSION, fx.CBS_SYSTEM, fx.SG300_SYSTEM_ID)
+        self.assertEqual((sg["version"], sg["serial"]), ("1.4.11.5", "DNITEST0001"))
+        cbs = parse.version_sx([], [], [], fx.CBS_VERSION, fx.CBS_SYSTEM, fx.CBS_SYSTEM_ID)
+        self.assertEqual((cbs["hostname"], cbs["model"], cbs["version"], cbs["serial"], cbs["mac"], cbs["uptime"]),
+                         ("asw-test-cbs", "CBS350-24FP-4G", "3.2.1.1", "FOCTEST0002", "40:14:82:00:00:78", "86,05:32:10"))
+
+    def test_cbs_poe_table(self):
+        self.assertEqual(parse.poe_totals(fx.CBS_POE), (370.0, 183.0))
+        ports = {p["port"]: (p["oper"], p["powerW"], p["class"]) for p in parse.poe_ports_sx(fx.CBS_POE)}
+        self.assertEqual(ports, {"Gi1": ("fault", 0.0, ""), "Gi3": ("on", 10.138, "4"), "Gi12": ("on", 0.798, "0"),
+                                 "Gi14": ("searching", 0.0, "")})
+
     def test_mac_device_id_becomes_chassis(self):
         n = parse._nbr("Gi1/0/1", "5017ff000001", "", "gi28")
         self.assertEqual(n["chassis"], "50:17:ff:00:00:01")

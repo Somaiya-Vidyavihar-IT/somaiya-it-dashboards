@@ -88,16 +88,27 @@ def version_nxos(rows):
     }
 
 
-def version_sx(version_rows, system_rows, system_id_rows):
+def version_sx(version_rows, system_rows, system_id_rows, version_text="", system_text="", system_id_text=""):
+    """SG/CBS/C1300 identity. Text first (real output, 2026-11-05): SG300 'SW version 1.4.11.5 (date…)',
+    CBS 'Active-image… Version: 3.2.1.1', and a per-unit 'Unit  Serial number' table on CBS that the
+    ntc template cannot read. The templates only fill what the text did not give."""
     version_rows, system_rows, system_id_rows = _up(version_rows), _up(system_rows), _up(system_id_rows)
     v = version_rows[0] if version_rows else {}
     s = system_rows[0] if system_rows else {}
     sid = system_id_rows[0] if system_id_rows else {}
-    desc = s.get("DESCRIPTION", "")
+    grab = lambda pattern, text: (re.search(pattern, text or "", re.M | re.I) or [None, ""])[1].strip()
+    desc = grab(r"^\s*System Description:\s*(\S.*?)\s*$", system_text) or s.get("DESCRIPTION", "")
+    serial = grab(r"Serial number\s*:\s*(\S+)", system_id_text)
+    if not serial:  # CBS: "Unit   Serial number" header, dashes, then " 1   FOC…"
+        m = re.search(r"Serial number[^\n]*\n\s*-[- ]+\n\s*\d+\s+(\S+)", system_id_text or "", re.I)
+        serial = m.group(1) if m else sid.get("SERIAL_NUMBER", "")
     return {
-        "hostname": s.get("HOSTNAME", ""), "version": v.get("SW_VERSION", ""),
-        "model": desc.split()[0] if desc else "", "serial": sid.get("SERIAL_NUMBER", ""),
-        "uptime": s.get("UP_TIME", ""), "mac": norm_mac(s.get("MAC_ADDRESS", "")),
+        "hostname": grab(r"^\s*System Name:\s*(\S+)", system_text) or s.get("HOSTNAME", ""),
+        "version": grab(r"SW version\s+(\d+(?:\.\d+)+)", version_text) or grab(r"Version:\s*(\d+(?:\.\d+)+)", version_text)
+        or v.get("SW_VERSION", ""),
+        "model": desc.split()[0] if desc else "", "serial": serial,
+        "uptime": grab(r"System Up Time\s*\([^)]*\)\s*:\s*(\S+)", system_text) or s.get("UP_TIME", ""),
+        "mac": norm_mac(grab(r"System MAC Address:\s*(\S+)", system_text) or s.get("MAC_ADDRESS", "")),
     }
 
 
@@ -192,7 +203,11 @@ def cdp_detail_text(text):
         m = re.search(r"Device[- ]ID\s*:\s*(\S+)", b)
         if not m:
             continue
-        ip = re.search(r"IP(?:v4)?\s+[Aa]ddress\s*:\s*(\d{1,3}(?:\.\d{1,3}){3})", b)
+        # IOS/NX-OS: "IP address: x" / "IPv4 Address: x". SG/CBS: "Primary Management Address: IP x,"
+        # and "Addresses:" followed by "          IP x" lines (seen live).
+        ip = (re.search(r"IP(?:v4)?\s+[Aa]ddress\s*:\s*(\d{1,3}(?:\.\d{1,3}){3})", b)
+              or re.search(r"Management Address\s*:\s*IP\s+(\d{1,3}(?:\.\d{1,3}){3})", b, re.I)
+              or re.search(r"(?m)^\s+IP\s+(\d{1,3}(?:\.\d{1,3}){3})\s*$", b))
         plat = re.search(r"Platform\s*:\s*([^,\n]+)", b)
         ports = re.search(r"Interface\s*:\s*([^,\n]+),\s*Port ID \(outgoing port\)\s*:\s*([^\n]+?)\s*$", b, re.M)
         caps = re.search(r"Capabilities\s*:\s*(.+)", b)
@@ -200,12 +215,34 @@ def cdp_detail_text(text):
         if not ports:
             continue
         name, chassis = m.group(1), ""
-        sysname = re.search(r"System Name\s*:\s*(\S+)", b)
-        if sysname and MAC_TEXT.fullmatch(name):  # Device-ID is the MAC; NX-OS also prints the real name
+        sysname = re.search(r"(?:System Name|SysName)\s*:\s*(\S+)", b)
+        if sysname and MAC_TEXT.fullmatch(name):  # Device-ID is the MAC; NX-OS/SG also print the real name
             name, chassis = sysname.group(1), name
         out.append(_nbr(ports.group(1), name, ip.group(1) if ip else "", ports.group(2),
                         plat.group(1) if plat else "", caps.group(1) if caps else "", ver.group(1) if ver else "",
                         chassis))
+    return out
+
+
+def lldp_summary_sx(text):
+    """SG/CBS/C1300 'show lldp neighbors' (seen live). Fixed columns Port | Device ID | Port ID |
+    System Name | Capabilities | TTL; long values wrap onto a continuation line with an empty Port
+    column ("LAB_2ndFloor_Staf" + "fRoom"). The ntc template stops at "B, R" and has no capabilities,
+    which is how APs ("W") are told apart from switches ("B, R")."""
+    rows = []
+    for r in fixed_table(text):
+        if not r.get("Port"):
+            if rows:  # continuation: the wrapped tail of each column belongs to the row above
+                for k, v in r.items():
+                    if v:
+                        rows[-1][k] = rows[-1].get(k, "") + v
+            continue
+        rows.append(dict(r))
+    out = []
+    for r in rows:
+        device_id = r.get("Device ID", "")
+        out.append(_nbr(r["Port"], r.get("System Name") or device_id, "", r.get("Port ID", ""),
+                        caps=r.get("Capabilities", ""), chassis=device_id))
     return out
 
 
@@ -338,6 +375,13 @@ def poe_totals(text):
             avail += float(m.group(1))
             used += float(m.group(2))
             found = True
+    # CBS350 / C1300 (seen live): "Unit Module  Nominal Power (W)  Consumed Power (W) …" header, then
+    # "1    CBS350-24FP-4G   370       183 (49%)    64 …"
+    if not found and re.search(r"Nominal", t) and re.search(r"Consumed", t):
+        for m in re.finditer(r"(?m)^\s*\d+\s+\S+\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*\(\d+%\)", t):
+            avail += float(m.group(1))
+            used += float(m.group(2))
+            found = True
     # SG300 key/value form: "Nominal Power: 180 Watts" / "Consumed Power: 10 Watts (6%)"
     if not found:
         noms = re.findall(r"Nominal Power\s*:\s*(\d+(?:\.\d+)?)\s*Watts", t)
@@ -356,9 +400,15 @@ def poe_ports_sx(text):
         if not m:
             continue
         rest = m.group(2)
+        # CBS/C1300 (seen live): "gi3  Auto  On  10.138 (25.5)  4  …" = admin, oper, power (limit), class.
+        row = re.match(r"\S+\s+(On|Off|Searching|Fault|Disabled)\s+(\d+(?:\.\d+)?)(?:\s*\([\d.]+\))?\s+(\d|-)\b", rest)
         oper = re.search(r"\b(On|Off|Searching|Fault|Disabled)\b", rest)
         watts = re.search(r"\b(\d+\.\d+)\b", rest)
         cls = re.search(r"\b[Cc]lass\s?(\d)\b", rest)
+        if row:
+            out.append({"port": short_if(m.group(1)), "oper": row.group(1).lower(), "powerW": float(row.group(2)),
+                        "device": "", "class": "" if row.group(3) == "-" else row.group(3)})
+            continue
         out.append({"port": short_if(m.group(1)), "oper": oper.group(1).lower() if oper else "",
                     "powerW": float(watts.group(1)) if watts else 0.0, "device": "",
                     "class": cls.group(1) if cls else ""})
@@ -395,7 +445,9 @@ def fixed_table(text):
             end = starts[k + 1] if k + 1 < len(starts) else len(header)
             names.append(header[start:end].strip())
         for line in lines[i + 1:]:
-            if not line.strip() or re.match(r"\s*(Total|Num|Flags|-)", line):
+            # Stop at the end of the table. A wrapped value can itself start with "-" (seen live:
+            # "-AS02-SG350"), so only a line made of dashes counts as a separator.
+            if not line.strip() or re.match(r"\s*(Total|Num |Num:|Flags)", line) or re.fullmatch(r"[\s-]+", line):
                 break
             values = []
             for k, start in enumerate(starts):
