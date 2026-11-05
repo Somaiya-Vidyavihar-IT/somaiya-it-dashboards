@@ -127,13 +127,40 @@ def classify_show_version(text):
 
 # ---------- neighbours ----------
 
+MAC_TEXT = re.compile(r"[0-9a-fA-F]{12}|([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}|([0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4}")
+
+
 def _nbr(local, name, ip, remote, platform="", caps="", desc="", chassis=""):
+    name = str(name or "").strip()
+    # SG/CBS switches advertise their MAC as the CDP Device-ID by default; keep it as the chassis MAC
+    # so the link can still be matched to the switch's own 'show system' MAC.
+    chassis = norm_mac(chassis) or (norm_mac(name) if MAC_TEXT.fullmatch(name) else "")
     return {
-        "localPort": short_if(local), "name": str(name or "").strip(), "ip": ip if is_ip(ip) else "",
+        "localPort": short_if(local), "name": name, "ip": ip if is_ip(ip) else "",
         "remotePort": short_if(remote), "platform": str(platform or "").strip(),
         "caps": str(caps or "").strip(), "desc": str(desc or "").strip()[:300],
-        "chassis": norm_mac(chassis),
+        "chassis": chassis,
     }
+
+
+def fill_missing_ips(primary, secondary):
+    """Merge a second parse of the same output into the first: copy missing management IPs and add
+    neighbours the first parse skipped. The ntc NX-OS CDP template drops the IP when a neighbour only
+    sends 'Interface address(es)' (seen live: 15 of 33 kept) and can skip entries altogether."""
+    key = lambda n: (n["localPort"], base_name(n["name"]))
+    have = {key(n): n for n in primary}
+    for n in secondary:
+        if not n["name"]:  # the NX-OS template returns some entries with no name; never add those
+            continue
+        cur = have.get(key(n))
+        if cur is None and n["ip"]:  # same port and IP under another name (MAC vs hostname) = same neighbour
+            cur = next((p for p in primary if p["localPort"] == n["localPort"] and p["ip"] == n["ip"]), None)
+        if cur is None:
+            primary.append(n)
+            have[key(n)] = n
+        elif not cur["ip"] and n["ip"]:
+            cur["ip"] = n["ip"]
+    return primary
 
 
 def cdp_textfsm(rows):
@@ -172,8 +199,13 @@ def cdp_detail_text(text):
         ver = re.search(r"Version\s*:?\s*\n?\s*(.+)", b)
         if not ports:
             continue
-        out.append(_nbr(ports.group(1), m.group(1), ip.group(1) if ip else "", ports.group(2),
-                        plat.group(1) if plat else "", caps.group(1) if caps else "", ver.group(1) if ver else ""))
+        name, chassis = m.group(1), ""
+        sysname = re.search(r"System Name\s*:\s*(\S+)", b)
+        if sysname and MAC_TEXT.fullmatch(name):  # Device-ID is the MAC; NX-OS also prints the real name
+            name, chassis = sysname.group(1), name
+        out.append(_nbr(ports.group(1), name, ip.group(1) if ip else "", ports.group(2),
+                        plat.group(1) if plat else "", caps.group(1) if caps else "", ver.group(1) if ver else "",
+                        chassis))
     return out
 
 
@@ -396,6 +428,13 @@ def ap_database_table(rows):
     return out
 
 
+def ap_database_best(rows, text):
+    """The ntc template drops APs whose names contain spaces (seen live: 16 of 20 rows); the column
+    reader keeps them. Use whichever found more."""
+    by_template, by_columns = ap_database(rows), ap_database_table(fixed_table(text))
+    return by_columns if len(by_columns) > len(by_template) else (by_template or by_columns)
+
+
 def ap_clients(rows):
     """{ap name: client count} from 'show ap active'. Handles '11g Clients' columns and the newer
     'Radio N Band Ch/EIRP/MaxEIRP/Clients' values ending in '/<clients>'."""
@@ -416,13 +455,20 @@ def ap_clients(rows):
 
 
 def ap_lldp(rows):
-    """{ap name: {switch, switchIp, port}} from 'show ap lldp neighbors'."""
+    """{ap name: {switch, switchIp, port}} from 'show ap lldp neighbors'.
+
+    AOS 8 columns (seen live): AP | Interface | Neighbor (an index, e.g. "0") | Chassis Name/ID |
+    Port ID | Port Desc | Mgmt. Address | Capabilities. "Not received" means the switch sent nothing."""
     out = {}
+    clean = lambda v: "" if str(v or "").strip().lower() in ("not received", "n/a", "-") else str(v or "").strip()
     for r in rows:
         name = r.get("AP") or r.get("AP Name") or ""
         if not name or name in out:
             continue
-        out[name] = {"switch": r.get("Neighbor", "") or r.get("Neighbor Name", ""),
-                     "switchIp": r.get("Neighbor IP", "") if is_ip(r.get("Neighbor IP", "")) else "",
-                     "port": short_if(r.get("Neighbor Port", "") or r.get("Port", ""))}
+        neighbor = r.get("Neighbor", "")
+        switch = clean(r.get("Chassis Name/ID") or r.get("Neighbor Name") or ("" if neighbor.isdigit() else neighbor))
+        ip = clean(r.get("Mgmt. Address") or r.get("Mgmt Address") or r.get("Neighbor IP"))
+        port = clean(r.get("Port ID") or r.get("Neighbor Port") or r.get("Port"))
+        if switch or ip:
+            out[name] = {"switch": switch, "switchIp": ip if is_ip(ip) else "", "port": short_if(port)}
     return out

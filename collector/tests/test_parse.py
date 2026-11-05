@@ -71,7 +71,14 @@ class CustomParsers(unittest.TestCase):
         self.assertEqual(clients, {"ap-lib-01": 12, "ap-lib-02": 4})
         self.assertEqual(parse.ap_clients(parse.fixed_table(fx.ARUBA_AP_ACTIVE_RADIO)), {"ap-hall-01": 9})
         lldp = parse.ap_lldp(parse.fixed_table(fx.ARUBA_AP_LLDP))
-        self.assertEqual(lldp, {"ap-lib-01": {"switch": "asw-test-02", "switchIp": "10.0.1.2", "port": "Gi1/0/1"}})
+        self.assertEqual(lldp, {"ap-lib-01": {"switch": "asw-test-02", "switchIp": "10.0.1.2", "port": "Gi1/0/1"},
+                                "ap-hall-07": {"switch": "asw-test-03-SG300", "switchIp": "", "port": "Gi22"}},
+                         "switch comes from 'Chassis Name/ID', never the 'Neighbor' index; 'Not received' is blank")
+
+    def test_mac_device_id_becomes_chassis(self):
+        n = parse._nbr("Gi1/0/1", "5017ff000001", "", "gi28")
+        self.assertEqual(n["chassis"], "50:17:ff:00:00:01")
+        self.assertEqual(parse._nbr("Gi1/0/1", "dsw-01", "", "gi28")["chassis"], "")
 
     def test_interface_status_fallback_reads_every_status(self):
         rows = {r["port"]: r for r in parse.ports_status_text(fx.NXOS_INTERFACE_STATUS)}
@@ -127,6 +134,30 @@ class TextFsmNormalisers(unittest.TestCase):
         results = {"ports": (rows, fx.NXOS_INTERFACE_STATUS)}
         devices._normalise(rec, "cisco_nxos", results)
         self.assertEqual(len(rec["ports"]), 6)
+
+    def test_nxos_cdp_interface_address_ip_is_kept(self):
+        """Regression (live Nexus capture): the template returned no IP for 18 of 33 neighbours that
+        only send 'Interface address(es)', so the crawl could not reach their institutes."""
+        rows = parse_output(platform="cisco_nxos", command="show cdp neighbors detail", data=fx.NXOS_CDP_INTERFACE_ADDRESS)
+        self.assertTrue(all(not parse.cdp_textfsm(rows)[i]["ip"] for i in range(len(rows))), "template still drops it")
+        from netmon import devices
+        rec = {"warnings": [], "hostname": ""}
+        devices._normalise(rec, "cisco_nxos", {"cdp": (rows, fx.NXOS_CDP_INTERFACE_ADDRESS)})
+        got = {n["name"]: (n["ip"], n["chassis"]) for n in rec["neighbors"]}
+        self.assertEqual(got["dsw-test-sg5"], ("10.0.21.5", ""))
+        # MAC Device-ID with a System Name line: named by hostname, MAC kept as chassis, listed once.
+        self.assertEqual(got["asw-test-sg300"], ("10.0.21.9", "50:17:ff:00:00:01"))
+        # MAC Device-ID and no System Name: the MAC is the name and the chassis.
+        self.assertEqual(got["5017ff000002"], ("10.0.21.10", "50:17:ff:00:00:02"))
+        self.assertEqual(len(rec["neighbors"]), 3, [n["name"] for n in rec["neighbors"]])
+        self.assertEqual(len({n["localPort"] for n in rec["neighbors"]}), 3, "one entry per port")
+
+    def test_ap_database_keeps_names_with_spaces(self):
+        text = fx.ARUBA_AP_DATABASE_SPACES
+        rows = parse_output(platform="aruba_os", command="show ap database long", data=text)
+        best = parse.ap_database_best(rows, text)
+        self.assertEqual([a["name"] for a in best], ["ap-lib-01", "LAB_ Research Room", "LAB_IT LAB"])
+        self.assertEqual(best[2]["mac"], "20:4c:03:00:00:32")
 
     def test_ios_poe_ports(self):
         rows = parse.poe_ports_ios(parse_output(platform="cisco_ios", command="show power inline", data=fx.IOS_POE))

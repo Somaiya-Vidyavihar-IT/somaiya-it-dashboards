@@ -18,12 +18,18 @@ def iso_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def neighbor_kind(n, extra_ouis=()):
+def neighbor_kind(n, extra_ouis=(), ap_names=frozenset(), ap_macs=frozenset()):
     text = " ".join((n.get("platform", ""), n.get("desc", ""))).lower()
     caps = n.get("caps", "").lower()
     oui = n.get("chassis", "")[:8]
+    port_mac = norm_mac(n.get("remotePort", ""))
     wlan_flag = re.search(r"(^|[\s,])W($|[\s,])", n.get("caps", ""))  # LLDP abbreviated caps, e.g. "B,W"
-    if "aruba" in text or "wlan" in caps or "access point" in caps or wlan_flag or oui in ARUBA_OUIS or oui in extra_ouis:
+    # SG/CBS 'show lldp neighbors' gives no capabilities or description, so also recognise APs the
+    # WLCs know by name or wired MAC (seen live: 14 of 18 unclassified neighbours were WLC APs).
+    known_ap = n.get("name", "").lower() in ap_names or (n.get("chassis") or port_mac or "-") in ap_macs \
+        or (port_mac and port_mac in ap_macs)
+    if known_ap or "aruba" in text or "wlan" in caps or "access point" in caps or wlan_flag \
+            or oui in ARUBA_OUIS or oui in extra_ouis or (port_mac and port_mac[:8] in extra_ouis):
         return "ap"
     if "phone" in caps or "phone" in text:
         return "phone"
@@ -74,9 +80,13 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     # ---- neighbour observations -> links ----
     obs = defaultdict(list)  # (A, B) -> [(portA, reportedPortB, via)]
     unresolved = {}
+    wlc_aps = [a for w in wlcs if w.get("ok") for a in w.get("aps", [])]
+    ap_names = {a["name"].lower() for a in wlc_aps if a.get("name")}
+    ap_macs = {a["mac"] for a in wlc_aps if a.get("mac")}
+    ap_ouis = extra_ouis | {m[:8] for m in ap_macs}  # vendor prefixes of the APs this campus really has
     for r in ok:
         for n in r["neighbors"]:
-            n["kind"] = neighbor_kind(n, extra_ouis)
+            n["kind"] = neighbor_kind(n, ap_ouis, ap_names, ap_macs)
             if n["kind"] in ("ap", "phone"):
                 continue
             peer = resolve(n)
@@ -319,7 +329,8 @@ def _build_aps(cfg, ok, wlcs, name_idx, host_of, institute, finding, extra_ouis)
             if n.get("kind") != "ap":
                 continue
             p = poe.get(n["localPort"], {})
-            switch_side.append({"name": n["name"], "mac": n.get("chassis", ""), "ip": n["ip"], "switchIp": r["ip"],
+            mac = n.get("chassis") or norm_mac(n.get("remotePort", ""))  # SG/CBS LLDP: port ID is the AP's MAC
+            switch_side.append({"name": n["name"], "mac": mac, "ip": n["ip"], "switchIp": r["ip"],
                                 "switch": r["hostname"], "port": n["localPort"], "via": n["via"],
                                 "model": _ap_model(n), "poeW": p.get("powerW"), "poeClass": p.get("class", "")})
 

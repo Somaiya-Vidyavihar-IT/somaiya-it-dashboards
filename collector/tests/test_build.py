@@ -104,6 +104,23 @@ class BuildSnapshot(unittest.TestCase):
         self.assertEqual(self.snap["summary"]["aps"], 3)
         self.assertEqual(self.snap["summary"]["apsUp"], 1)
 
+    def test_sx_lldp_neighbour_known_to_wlc_is_an_ap(self):
+        """SG/CBS 'show lldp neighbors' gives only name, port ID (often the AP's MAC) and chassis."""
+        from netmon.parse import _nbr
+        records = campus()
+        bare = _nbr("Gi1/0/9", "LAB_IT LAB", "", "20:4c:03:00:00:32")
+        bare["via"] = ["lldp"]
+        oui_only = _nbr("Gi1/0/10", "SSA_TT_1", "", "20:4c:03:aa:bb:cc")
+        oui_only["via"] = ["lldp"]
+        records[2]["neighbors"] += [bare, oui_only]
+        wlc = [dict(WLC[0], aps=WLC[0]["aps"] + [{"name": "LAB_IT LAB", "group": "campus", "model": "315", "ip": "10.60.0.32",
+                                                "status": "Up 1d", "mac": "20:4c:03:00:00:32", "serial": "CNTEST0032", "flags": ""}])]
+        snap, _, _ = build.build(CFG, records, wlc, now="2026-11-05T02:30:00Z")
+        kinds = {n["name"]: n["kind"] for d in snap["devices"] if d["ip"] == "10.0.1.2" for n in d["neighbors"]}
+        self.assertEqual((kinds["LAB_IT LAB"], kinds["SSA_TT_1"], kinds["dsw-01"]), ("ap", "ap", "switch"))
+        lab = next(a for a in snap["aps"] if a["name"] == "LAB_IT LAB")
+        self.assertEqual((lab["switch"], lab["port"], lab["serial"]), ("asw-02", "Gi1/0/9", "CNTEST0032"))
+
     def test_lost_uplink_and_error_delta_on_next_run(self):
         snap2, _, _ = build.build(CFG, campus(include_uplink=False, errors={"Gi1/0/1": 400}), WLC, self.baseline,
                                   self.counters, now="2026-11-05T11:00:00Z")

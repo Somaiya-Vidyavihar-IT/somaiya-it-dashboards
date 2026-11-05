@@ -135,7 +135,9 @@ def _normalise(rec, platform, results):
         rec["cdp"] = parse.cdp_detail_text(get("cdp")[1])
     else:
         rec.update((parse.version_nxos if platform == "cisco_nxos" else parse.version_ios)(get("version")[0]))
-        rec["cdp"] = parse.cdp_textfsm(get("cdp")[0]) or parse.cdp_detail_text(get("cdp")[1])
+        # Text parser first: on the live Nexus it read all 33 entries with names and IPs, while the
+        # ntc template left names or IPs blank on 18. The template only fills gaps.
+        rec["cdp"] = parse.fill_missing_ips(parse.cdp_detail_text(get("cdp")[1]), parse.cdp_textfsm(get("cdp")[0]))
     rec["lldp"] = parse.lldp_textfsm(get("lldp")[0])
     rec["neighbors"] = parse.merge_neighbors(rec["cdp"], rec["lldp"])
     rec["ports"] = parse.ports_textfsm(get("ports")[0], platform) or parse.ports_status_text(get("ports")[1])

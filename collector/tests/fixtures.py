@@ -166,9 +166,68 @@ ap-hall-09  campus   303      10.60.0.19   Down          N      10.0.0.5     0.0
 Total APs:2
 """
 
-ARUBA_AP_LLDP = """AP LLDP Neighbors
------------------
-AP          Interface  Neighbor      Neighbor IP  Neighbor Port
---          ---------  --------      -----------  -------------
-ap-lib-01   eth0       asw-test-02   10.0.1.2     gi1/0/1
+# Real AOS 8 layout (2026-11-05 capture), invented values: "Neighbor" is an index, the switch is
+# "Chassis Name/ID", and "Not received" marks fields the switch did not send.
+ARUBA_AP_LLDP = """AP LLDP Neighbors (Updated every 60 seconds)
+--------------------------------------------
+AP                   Interface  Neighbor  Chassis Name/ID           Port ID  Port Desc     Mgmt. Address  Capabilities
+--                   ---------  --------  ---------------           -------  ---------     -------------  ------------
+ap-lib-01            bond0      0         asw-test-02               gi1/0/1  Not received  10.0.1.2       BR
+ap-hall-07           bond0      0         asw-test-03-SG300         gi22     Not received  Not received   B
+
+Capability codes: (R)Router, (B)Bridge, (A)Access Point, (P)Phone, (O)Other
+"""
+
+# AP names with spaces: the ntc template drops these rows (seen live), the column reader keeps them.
+ARUBA_AP_DATABASE_SPACES = """AP Database
+-----------
+Name                 Group     AP Type  IP Address    Status         Flags  Switch IP   Standby IP  Wired MAC Address  Serial #    Port  FQLN  Outer IP  User
+----                 -----     -------  ----------    ------         -----  ---------   ----------  -----------------  --------    ----  ----  --------  ----
+ap-lib-01            campus    515      10.60.0.11    Up 3d:4h:1m    2      10.0.0.5    0.0.0.0     20:4c:03:00:00:01  CNTEST0001  N/A   N/A   N/A
+LAB_ Research Room   campus    315      10.60.0.31    Down           2      10.0.0.5    0.0.0.0     20:4c:03:00:00:31  CNTEST0031        N/A   N/A
+LAB_IT LAB           campus    315      10.60.0.32    Down           2      10.0.0.5    0.0.0.0     20:4c:03:00:00:32  CNTEST0032        N/A   N/A
+
+Total APs:3
+"""
+
+# Real NX-OS 'show cdp neighbors detail' layout for a neighbour that sends only
+# "Interface address(es)" (older Nexus, SG500X). The ntc template returns no IP for it.
+NXOS_CDP_INTERFACE_ADDRESS = """
+----------------------------------------
+Device ID:dsw-test-sg5
+System Name: dsw-test-sg5
+
+Interface address(es): 1
+    IPv4 Address: 10.0.21.5
+Platform: Cisco SG500X-24 (PID:SG500X-24-K9)-VSD, Capabilities: Router Switch IGMP Filtering
+Interface: Ethernet1/7, Port ID (outgoing port): te1/1/1
+Holdtime: 134 sec
+
+Version:
+1.4.11.4
+
+Advertisement Version: 2
+
+Native VLAN: 21
+Duplex: full
+Local Interface MAC: 70:a9:83:00:00:42
+Remote Interface MAC: d4:d7:48:00:00:b0
+DC_UUID:
+----------------------------------------
+Device ID:5017ff000001
+System Name: asw-test-sg300
+
+Interface address(es): 1
+    IPv4 Address: 10.0.21.9
+Platform: Cisco SG300-28 (PID:SRW2024-K9)-VSD, Capabilities: Switch IGMP
+Interface: Ethernet1/8, Port ID (outgoing port): gi27
+Holdtime: 120 sec
+----------------------------------------
+Device ID:5017ff000002
+
+Interface address(es): 1
+    IPv4 Address: 10.0.21.10
+Platform: Cisco SG300-28 (PID:SRW2024-K9)-VSD, Capabilities: Switch IGMP
+Interface: Ethernet1/9, Port ID (outgoing port): gi28
+Holdtime: 120 sec
 """

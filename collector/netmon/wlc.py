@@ -35,7 +35,7 @@ def collect(host, username, password, cfg, raw_sink=None):
         except Exception:
             pass
     db_rows, db_text = out.get("database", ([], ""))
-    rec["aps"] = parse.ap_database(db_rows) or parse.ap_database_table(parse.fixed_table(db_text))
+    rec["aps"] = parse.ap_database_best(db_rows, db_text)
     rec["clients"] = parse.ap_clients(parse.fixed_table(out.get("active", ([], ""))[1]))
     rec["apLldp"] = parse.ap_lldp(parse.fixed_table(out.get("lldp", ([], ""))[1]))
     rec["ok"] = bool(rec["aps"])
