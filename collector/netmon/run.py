@@ -76,6 +76,10 @@ def _discover(cfg, store, trigger, by, started):
     # 2-5. SSH authentication, device information, CDP + LLDP, recursive discovery.
     records, scanned = [], set()
     store.status(phase="ssh", done=0, total=len(open_ips))
+    # Load netmiko once in this thread. Worker threads importing it for the first time at the same
+    # moment raise "_DeadlockError ... netmiko.exceptions" (seen live: both Nexus seeds failed).
+    import netmiko  # noqa: F401
+    import netmiko.exceptions  # noqa: F401
 
     def work(ip):
         known_set = cred_of.get(ip)
