@@ -56,8 +56,9 @@ def main(argv=None):
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s",
         handlers=[logging.FileHandler(os.path.join(data_dir, "logs", f"netmon-{args.cmd}.log"), encoding="utf-8"),
                   logging.StreamHandler()])
-    # Netmiko/paramiko are chatty at INFO and can echo device banners; keep them quiet.
-    logging.getLogger("paramiko").setLevel(logging.WARNING)
+    # Netmiko/paramiko are chatty and print full tracebacks for every refused SSH session; each
+    # failure is already recorded on that switch's record (Findings tab), so keep them quiet.
+    logging.getLogger("paramiko").setLevel(logging.CRITICAL)
     logging.getLogger("netmiko").setLevel(logging.WARNING)
 
     if args.cmd == "run":

@@ -54,6 +54,21 @@ class Cli(unittest.TestCase):
         self.assertIn("single quotes", str(ctx.exception))
         self.assertEqual(cli.main(["--config", os.path.join(self.tmp.name, "missing.toml"), "check-config"]), 2)
 
+    def test_ssh_library_still_speaks_to_old_switches(self):
+        """Regression (live run, 2026-11-05): paramiko 5 dropped SHA-1 key exchange, so older Catalyst
+        and SG switches failed with 'no acceptable kex algorithm'. requirements.txt pins paramiko<4."""
+        try:
+            import paramiko
+        except ImportError:
+            self.skipTest("paramiko not installed")
+        t = paramiko.Transport
+        for kex in ("diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1"):
+            self.assertIn(kex, t._preferred_kex, f"{kex} missing: old switches cannot connect")
+        self.assertIn("ssh-rsa", t._preferred_keys)
+        modern = [k for k in t._preferred_kex if "sha1" not in k]
+        self.assertLess(t._preferred_kex.index(modern[0]), t._preferred_kex.index("diffie-hellman-group1-sha1"),
+                        "modern key exchange must stay preferred")
+
     def test_store_rejects_unknown_set(self):
         with self.assertRaises(creds.CredentialError):
             creds.store(self.cfg, "switch", "x", "set9")
