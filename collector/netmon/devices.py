@@ -44,23 +44,25 @@ for _cmds in COMMANDS.values():
 
 
 def _connect(device_type, ip, username, password, cfg):
-    from netmiko import ConnectHandler
     col = cfg["collector"]
-    return ConnectHandler(
-        device_type=device_type, host=ip, username=username, password=password,
-        conn_timeout=15, auth_timeout=20, banner_timeout=20, timeout=col["command_timeout"],
-        read_timeout_override=col["command_timeout"], fast_cli=False,
-    )
+    kwargs = dict(host=ip, username=username, password=password, conn_timeout=15, auth_timeout=20,
+                  banner_timeout=20, timeout=col["command_timeout"],
+                  read_timeout_override=col["command_timeout"], fast_cli=False)
+    if device_type == "cisco_s300":
+        # SG/CBS/C1300: our driver also completes the in-band "User Name:" login (see sx.py).
+        from .sx import SxSSH
+        return SxSSH(device_type="cisco_s300", **kwargs)
+    from netmiko import ConnectHandler
+    return ConnectHandler(device_type=device_type, **kwargs)
 
 
 def detect_platform(ip, username, password, cfg):
-    """Log in as cisco_ios, read 'show version' and pick the driver. SG/CBS boxes that prompt
-    'User Name:' after SSH auth fail the cisco_ios login and are retried as cisco_s300."""
-    from netmiko.exceptions import NetmikoAuthenticationException
+    """Log in as cisco_ios, read 'show version' and pick the driver. SG/CBS/C1300 switches without
+    'ip ssh password-auth' refuse that login (or stall at an in-band "User Name:" prompt), so any
+    failure is retried once with the SG/CBS driver; if that is refused too, the error is the
+    SG/CBS one, so a wrong password is still reported as an authentication failure."""
     try:
         conn = _connect("cisco_ios", ip, username, password, cfg)
-    except NetmikoAuthenticationException:
-        raise
     except Exception:
         conn = _connect("cisco_s300", ip, username, password, cfg)
         conn.disconnect()

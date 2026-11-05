@@ -97,6 +97,28 @@ class FullRunOrchestration(unittest.TestCase):
             self.assertEqual(run.full_run(cfg), 0)
             self.assertEqual([u for ip, u in logins if ip == "10.0.0.1"], ["new-user"], "remembered set is tried first")
 
+    def test_neighbour_platform_hint_skips_catalyst_detection(self):
+        """A switch its neighbours report as CBS/SG/C1300 goes straight to the SG/CBS driver."""
+        store = Store(self.tmp.name)
+        # As on campus: last run listed the CBS switch as failed, and a neighbour reported its model.
+        store.write({"devices": [{"ip": "10.0.0.1", "neighbors": [
+            {"ip": "10.0.0.2", "platform": "Cisco CBS350-24P-4G (PID:CBS350-24P-4G)-VSD"}]},
+            {"ip": "10.0.0.2", "status": "failed", "neighbors": []}]}, "latest.json")
+        cfg = config.validate({"collector": {"switch_username": "u", "data_dir": self.tmp.name},
+                               "subnets": [{"cidr": "10.0.0.0/30", "sweep": False}]})
+        used = {}
+
+        def collect(ip, platform, *a):
+            used[ip] = platform
+            return dict(self.records["10.0.0.1"], ip=ip, neighbors=[])
+        with mock.patch("netmon.scan.probe", side_effect=lambda ips, *a: {ip: 1.0 for ip in ips}), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.devices.detect_platform", return_value="cisco_ios") as detect, \
+                mock.patch("netmon.devices.collect", side_effect=collect):
+            self.assertEqual(run.full_run(cfg), 0)
+        self.assertEqual(used["10.0.0.2"], "cisco_s300")
+        self.assertEqual([c.args[0] for c in detect.call_args_list], ["10.0.0.1"], "only the unhinted switch is detected")
+
     def test_second_run_refused_while_locked(self):
         store = Store(self.tmp.name)
         self.assertTrue(store.acquire({"trigger": "scheduled"}))

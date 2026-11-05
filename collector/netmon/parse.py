@@ -101,6 +101,18 @@ def version_sx(version_rows, system_rows, system_id_rows):
     }
 
 
+def platform_hint(text):
+    """Driver guess from a neighbour's CDP/LLDP platform string, e.g. 'Cisco CBS350-24P-4G (PID:…)'."""
+    t = text or ""
+    if re.search(r"\b(SG\d{3}|SF\d{3}|CBS\d{3}|C1300|SRW\d{3,4}|SX\d{3})", t, re.I):
+        return "cisco_s300"
+    if re.search(r"\bN\dK|Nexus|NX-OS", t, re.I):
+        return "cisco_nxos"
+    if re.search(r"WS-C|\bC9\d{3}|\bC1000|\bC3[68]50|\bIE-\d|\bISR|\bASR", t, re.I):
+        return "cisco_ios"
+    return ""
+
+
 def classify_show_version(text):
     """Which netmiko driver fits, from 'show version' text read over a cisco_ios session."""
     t = text or ""

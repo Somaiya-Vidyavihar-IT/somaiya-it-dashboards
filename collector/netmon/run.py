@@ -4,7 +4,7 @@ import os
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from . import build, config as config_mod, creds, devices, reports, scan, wlc
+from . import build, config as config_mod, creds, devices, parse, reports, scan, wlc
 from .store import Store, stamp
 
 log = logging.getLogger("netmon.run")
@@ -65,7 +65,20 @@ def _discover(cfg, store, trigger, by, started):
 
     # 1. IP range scanner: TCP 22 over sweep-enabled subnets, plus seeds and last run's devices.
     targets = list(scan.sweep_targets(cfg))
-    known = [d["ip"] for d in (store.read("latest.json", default={}) or {}).get("devices", [])]
+    previous = store.read("latest.json", default={}) or {}
+    known = [d["ip"] for d in previous.get("devices", [])]
+    # Driver hints from what neighbours report over CDP/LLDP (e.g. "Cisco CBS350-24P-4G"), so SG/CBS/
+    # C1300 switches go straight to the in-band-login driver instead of failing a Catalyst login first.
+    hints = {}
+
+    def add_hints(neighbors):
+        for n in neighbors or []:
+            hint = parse.platform_hint(n.get("platform", ""))
+            if n.get("ip") and hint:
+                hints.setdefault(n["ip"], hint)
+
+    for d in previous.get("devices", []):
+        add_hints(d.get("neighbors"))
     extra = [ip for ip in list(col["seeds"]) + known if config_mod.in_scope(cfg, ip)]
     log.info("Sweeping %d addresses for tcp/22", len(targets) + len(extra))
     probes = scan.probe(targets + extra, 22, col["connect_timeout"], col["scan_concurrency"])
@@ -85,8 +98,10 @@ def _discover(cfg, store, trigger, by, started):
         known_set = cred_of.get(ip)
         order = ([by_name[known_set]] if known_set in by_name else []) + [s for s in sets if s[0] != known_set]
         rec = None
+        subnet_platform = (config_mod.subnet_for(cfg, ip) or {}).get("platform", "auto")
         for name, username, password in order:
-            platform = platforms.get(ip) or (config_mod.subnet_for(cfg, ip) or {}).get("platform", "auto")
+            # Learned driver > driver forced for the subnet > neighbour hint > detect.
+            platform = platforms.get(ip) or (subnet_platform if subnet_platform != "auto" else hints.get(ip, "auto"))
             if platform == "auto":
                 try:
                     platform = devices.detect_platform(ip, username, password, cfg)
@@ -118,6 +133,7 @@ def _discover(cfg, store, trigger, by, started):
             for fut in done:
                 rec = fut.result()
                 records.append(rec)
+                add_hints(rec.get("neighbors"))
                 new = []
                 for n in rec.get("neighbors", []):
                     ip = n.get("ip")
