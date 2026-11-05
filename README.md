@@ -1,6 +1,6 @@
 # Somaiya IT Dashboards
 
-A read-only support dashboard hub for Somaiya Vidyavihar IT, hosted on GitHub Pages. Issue updates and AI reviews are maintained in Google Sheets and read directly after Google authorization.
+A read-only support dashboard hub for Somaiya Vidyavihar IT, hosted on GitHub Pages. Issue updates and AI reviews are maintained in Google Sheets and read directly after Google authorization. Network Monitoring reads the campus network collector API instead (see below).
 
 - [Live dashboard hub](https://somaiya-vidyavihar-it.github.io/somaiya-it-dashboards/)
 - [Repository](https://github.com/Somaiya-Vidyavihar-IT/somaiya-it-dashboards)
@@ -31,6 +31,15 @@ Headers: Sr No., Date Marked, Observations, Status, Remarks, Remarks from Somaiy
 Done and Already Done count as Marked Done; Working as expected is separate. All other or blank statuses remain outstanding. These are sheet statuses, never inferred IT acceptance. Vendor/team remarks remain separate escaped text. No owners, module, priorities, closure dates, or acceptance decisions are invented. Daily snapshots group Date Marked using current statuses and remarks; historical pending and daily resolved figures are unavailable. CSV exports follow the current queue and combined filters.
 
 `tests/uat.cjs` adds synthetic mapping, merged dates, filters, rendering, exports, and connection lifecycle checks to `node tests/check.cjs`. Keep the existing Production and KOHA contracts unchanged.
+
+### Network Monitoring
+
+`site/network-monitoring/index.html` (`#network-monitoring`) shows the campus switching estate: the Nexus 9K core, the Catalyst / SG / CBS / C1300 distribution and access switches, and the Aruba APs. It covers inventory, a core → distribution → access topology, up/down, lost or down uplinks, err-disabled ports and error bursts, PoE budget, CPU, and an AP inventory that joins WLC data with switch CDP/LLDP and PoE. Excel and Graphviz DOT exports come from the API.
+
+- **Data source:** `collector/` (`netmon`), a read-only Python collector and HTTPS API on a campus Windows host. Full runs happen at 08:00 and 16:30 IST and on demand; a TCP/22 up/down check runs every 15 minutes. See [collector/README.md](collector/README.md).
+- **Access:** the page uses the shared hub Google session. The API checks the token with Google and allows only the IT Network Team list. Others see "Access denied" and no data. The API is reachable only on campus/VPN; no network data is stored on GitHub, Pages or Google.
+- **Configuration:** `netmonApiBase` in `site/config.js` (blank shows "Not configured").
+- **Run discovery now:** available to the IT Network Team; one run at a time, and each request is audited on the collector host.
 
 ### AI Review in the dashboards
 
@@ -151,12 +160,15 @@ site/
   production-support/index.html   # Production UI and logic
   koha-support/index.html         # KOHA UI, logic, and mapper
   uat-observations/index.html     # UAT Observations UI, logic, and mapper
+  network-monitoring/index.html   # Network Monitoring UI (data from the campus collector API)
+collector/                        # netmon: read-only network collector + HTTPS API (campus host, not Pages)
 tests/
   check.cjs                       # Main checks, including KOHA fixtures
   browser-flow.cjs                 # Production fixture flow
   session.cjs                     # Session handoff, recovery, logout, expiry
   ai-review.cjs                   # Review mapping, escaping, filters, exports
   uat.cjs                         # UAT mapping, merged dates, filters, exports, lifecycle
+  network-monitoring.cjs          # Network page access, escaping, filters, Run now, expiry
   table-sort.cjs                  # Queue sorting, hub accessibility, release token
   koha-screenshots.cjs            # KOHA screenshot links, previews, export
 .github/workflows/pages.yml       # Checks and Pages deployment

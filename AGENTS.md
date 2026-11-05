@@ -13,10 +13,21 @@ Somaiya IT Dashboards is a read-only GitHub Pages hub for the support team. Goog
 - `site/shared/table-sort.js`: display-only, accessible queue column sorting shared by all dashboards.
 - `site/koha-support/index.html`: KOHA UI, application logic, and its separate mapper.
 - `site/shared/session.js` and `session-worker.js`: portal-owned and shared in-memory authorization, tab exchange, and recovery.
-- `site/config.js`: public Google OAuth client ID.
-- `.github/workflows/pages.yml`: validation and deployment of `site/` only.
+- `site/config.js`: public Google OAuth client ID and the campus network API address (`netmonApiBase`).
+- `site/network-monitoring/index.html`: Network Monitoring UI. Its data comes from the campus collector API, not Google Sheets.
+- `collector/`: the Python network collector and HTTPS API (`netmon`) that run on a campus Windows host. It is never deployed to Pages.
+- `.github/workflows/pages.yml`: validation and deployment of `site/` only. It also runs the collector's unit tests.
 
-Preserve the existing structure for focused changes. Do not introduce a framework, server, database, dependencies, or build pipeline without a concrete requirement.
+Preserve the existing structure for focused changes. Do not introduce a framework, server, database, dependencies, or build pipeline without a concrete requirement. The one approved exception is `collector/`, for Network Monitoring: switches can only be read from inside campus, and its data must not be public. Keep `site/` buildless and its dependency-free browser code separate from `collector/`.
+
+### Network Monitoring
+
+- The page shares the hub's Google session and requests the same scopes. It calls `netmonApiBase` with `Authorization: Bearer <token>`. The API verifies the token with Google (hub client ID, verified email, allowed domain) and allows only emails on its IT Network Team list. It holds no data until the API answers.
+- The API is campus-only (internal DNS, Windows Firewall) and answers CORS only for the hub origin. Treat 401 from the API as expiry, 403 as access denied (clear data, keep the session) and network errors as "campus only".
+- Snapshot contract (`schema: 1`): `summary`, `institutes`, `devices` (ip, hostname, institute, role core/distribution/access/unknown, platform, model, serial, version, uptime, status ok/failed, cpu, poe, ports, errDelta, flags, neighbors), `links` (a/aPort/b/bPort, via, status up/down/lost/unknown, uplink, downstream), `problemPorts`, `aps` (Aruba WLC data joined with switch CDP/LLDP and PoE; `seenBy`), `findings`. Reachability comes separately from `/api/v1/reachability`.
+- All device text (LLDP/CDP names, descriptions) is untrusted. Escape it in HTML, keep it out of Excel formulas (`reports.safe_cell`) and quote it in DOT.
+- The collector is read-only: only `show` commands, asserted at import. Never add configuration commands.
+- Never commit `collector/config.toml`, collected data, captures, certificates or real device output. Fixtures are synthetic.
 
 ## Data contracts
 
@@ -77,7 +88,9 @@ node tests/check.cjs
 node tests/browser-flow.cjs
 ```
 
-`check.cjs` includes mapping/KOHA fixtures and invokes session and AI Review checks. `browser-flow.cjs` separately exercises Production's fixture flow. Tests use synthetic data and do not prove real Google consent or live permissions.
+`check.cjs` includes mapping/KOHA fixtures and invokes session, AI Review and Network Monitoring page checks. `browser-flow.cjs` separately exercises Production's fixture flow. Tests use synthetic data and do not prove real Google consent or live permissions.
+
+For `collector/` changes, also run `python -m unittest discover -s tests -t .` from `collector/` with its requirements installed (CI does this too). These tests use synthetic device output and prove nothing about real switch output. Validate parser changes against `python -m netmon capture` output on the collector host, and never commit that output.
 
 Add focused regression checks for changed behavior, especially date semantics, blank/reordered fields, escaped reviews, filters, session handoff/expiry/logout, and exports. Avoid tests that merely repeat implementation details.
 
@@ -98,3 +111,5 @@ Use approved browser tooling for relevant live checks when available. Distinguis
 ## Current limits
 
 Google authorization expires; there is no indefinite automatic renewal. Closing all hub/dashboard contexts ends the in-memory session. Unattended daily delivery, persistent daily snapshots, reopen/deletion history, and historical AI review versions are not implemented. Full mobile support and wider account/device acceptance testing remain follow-up work.
+
+Network Monitoring: no alerting (dashboard only), no SNMP counters or utilisation graphs, and no error counters on SG/CBS/C1300. Up/down is a 15-minute TCP/22 check. The SG/CBS CDP, PoE and CPU parsers and the Aruba `show ap active`/`show ap lldp neighbors` parsers need validating against real captures. Deploying the collector host, its certificate, DNS and firewall is done on campus and not by this workflow.

@@ -1,0 +1,361 @@
+"""Pure parsing and normalising helpers. No device access here, so everything is unit-testable.
+
+TextFSM (ntc-templates) output arrives as lists of dicts with upper-case keys; custom parsers
+cover commands that have no template for a platform. Device text is untrusted input.
+"""
+import re
+
+IFACE_PREFIXES = [
+    ("hundredgigabitethernet", "Hu"), ("hundredgige", "Hu"), ("fortygigabitethernet", "Fo"),
+    ("twentyfivegige", "Twe"), ("tengigabitethernet", "Te"), ("gigabitethernet", "Gi"),
+    ("fastethernet", "Fa"), ("ethernet", "Eth"), ("port-channel", "Po"), ("twe", "Twe"),
+    ("eth", "Eth"), ("gi", "Gi"), ("ge", "Gi"), ("te", "Te"), ("xg", "Te"), ("xe", "Te"),
+    ("fa", "Fa"), ("fe", "Fa"), ("fo", "Fo"), ("hu", "Hu"), ("po", "Po"), ("mgmt", "mgmt"),
+]
+
+
+def short_if(name):
+    """Canonical short interface name so CDP, LLDP, status and PoE rows can be joined."""
+    n = str(name or "").strip()
+    low = n.lower()
+    for long, short in IFACE_PREFIXES:
+        if low.startswith(long) and len(low) > len(long) and (low[len(long)].isdigit() or low[len(long)] == "/"):
+            return short + n[len(long):]
+    return n
+
+
+def norm_mac(value):
+    hexes = re.sub(r"[^0-9a-fA-F]", "", str(value or ""))
+    if len(hexes) != 12:
+        return ""
+    return ":".join(hexes[i:i + 2] for i in range(0, 12, 2)).lower()
+
+
+def base_name(name):
+    """Hostname without domain or NX-OS '(SERIAL)' suffix, lower-case."""
+    n = re.sub(r"\(.*?\)$", "", str(name or "").strip())
+    return n.split(".")[0].lower()
+
+
+def to_int(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def to_float(value):
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _up(rows):
+    """TextFSM rows with upper-case keys (netmiko and ntc-templates return lower-case)."""
+    return [{str(k).upper(): v for k, v in r.items()} for r in (rows or []) if isinstance(r, dict)]
+
+
+def first(value):
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
+
+
+def is_ip(value):
+    return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", str(value or "").strip()))
+
+
+# ---------- identity ----------
+
+def version_ios(rows):
+    rows = _up(rows)
+    r = rows[0] if rows else {}
+    return {
+        "hostname": r.get("HOSTNAME", ""), "version": r.get("VERSION", ""),
+        "model": first(r.get("HARDWARE")), "serial": first(r.get("SERIAL")),
+        "uptime": r.get("UPTIME", ""), "mac": norm_mac(first(r.get("MAC_ADDRESS"))),
+    }
+
+
+def version_nxos(rows):
+    rows = _up(rows)
+    r = rows[0] if rows else {}
+    return {
+        "hostname": r.get("HOSTNAME", ""), "version": r.get("OS", ""),
+        "model": r.get("PLATFORM", ""), "serial": r.get("SERIAL", ""),
+        "uptime": r.get("UPTIME", "").strip(), "mac": "",
+    }
+
+
+def version_sx(version_rows, system_rows, system_id_rows):
+    version_rows, system_rows, system_id_rows = _up(version_rows), _up(system_rows), _up(system_id_rows)
+    v = version_rows[0] if version_rows else {}
+    s = system_rows[0] if system_rows else {}
+    sid = system_id_rows[0] if system_id_rows else {}
+    desc = s.get("DESCRIPTION", "")
+    return {
+        "hostname": s.get("HOSTNAME", ""), "version": v.get("SW_VERSION", ""),
+        "model": desc.split()[0] if desc else "", "serial": sid.get("SERIAL_NUMBER", ""),
+        "uptime": s.get("UP_TIME", ""), "mac": norm_mac(s.get("MAC_ADDRESS", "")),
+    }
+
+
+def classify_show_version(text):
+    """Which netmiko driver fits, from 'show version' text read over a cisco_ios session."""
+    t = text or ""
+    if re.search(r"NX-OS|Nexus Operating System", t):
+        return "cisco_nxos"
+    if re.search(r"Cisco IOS|IOS-XE|IOS XE", t):
+        return "cisco_ios"
+    if re.search(r"SW version|Boot version|HW version|Active-image|Unrecognized command", t, re.I):
+        return "cisco_s300"
+    return ""
+
+
+# ---------- neighbours ----------
+
+def _nbr(local, name, ip, remote, platform="", caps="", desc="", chassis=""):
+    return {
+        "localPort": short_if(local), "name": str(name or "").strip(), "ip": ip if is_ip(ip) else "",
+        "remotePort": short_if(remote), "platform": str(platform or "").strip(),
+        "caps": str(caps or "").strip(), "desc": str(desc or "").strip()[:300],
+        "chassis": norm_mac(chassis),
+    }
+
+
+def cdp_textfsm(rows):
+    rows = _up(rows)
+    return [_nbr(r.get("LOCAL_INTERFACE"), r.get("NEIGHBOR_NAME"), r.get("MGMT_ADDRESS") or r.get("INTERFACE_IP"),
+                 r.get("NEIGHBOR_INTERFACE"), r.get("PLATFORM"), r.get("CAPABILITIES"),
+                 r.get("NEIGHBOR_DESCRIPTION")) for r in rows]
+
+
+def lldp_textfsm(rows):
+    rows = _up(rows)
+    out = []
+    for r in rows:
+        name = first(r.get("NEIGHBOR_NAME")) if not isinstance(r.get("NEIGHBOR_NAME"), list) else "".join(r["NEIGHBOR_NAME"])
+        remote = r.get("NEIGHBOR_PORT_ID") or r.get("NEIGHBOR_INTERFACE")
+        if isinstance(remote, list):
+            remote = "".join(remote)
+        out.append(_nbr(r.get("LOCAL_INTERFACE"), name, r.get("MGMT_ADDRESS"), remote,
+                        r.get("PLATFORM"), r.get("CAPABILITIES"), r.get("NEIGHBOR_DESCRIPTION"),
+                        r.get("CHASSIS_ID") or r.get("MAC_ADDRESS")))
+    return out
+
+
+def cdp_detail_text(text):
+    """Tolerant 'show cdp neighbors detail' parser (SG/CBS/C1300 and fallback for IOS)."""
+    out = []
+    blocks = re.split(r"(?m)^(?=\s*Device[- ]ID\s*:)", text or "")
+    for b in blocks:
+        m = re.search(r"Device[- ]ID\s*:\s*(\S+)", b)
+        if not m:
+            continue
+        ip = re.search(r"IP(?:v4)?\s+[Aa]ddress\s*:\s*(\d{1,3}(?:\.\d{1,3}){3})", b)
+        plat = re.search(r"Platform\s*:\s*([^,\n]+)", b)
+        ports = re.search(r"Interface\s*:\s*([^,\n]+),\s*Port ID \(outgoing port\)\s*:\s*([^\n]+?)\s*$", b, re.M)
+        caps = re.search(r"Capabilities\s*:\s*(.+)", b)
+        ver = re.search(r"Version\s*:?\s*\n?\s*(.+)", b)
+        if not ports:
+            continue
+        out.append(_nbr(ports.group(1), m.group(1), ip.group(1) if ip else "", ports.group(2),
+                        plat.group(1) if plat else "", caps.group(1) if caps else "", ver.group(1) if ver else ""))
+    return out
+
+
+def merge_neighbors(cdp, lldp):
+    """One entry per (local port, neighbour); 'via' records which protocols saw it."""
+    merged = {}
+    for proto, rows in (("cdp", cdp), ("lldp", lldp)):
+        for n in rows:
+            key = (n["localPort"], base_name(n["name"]) or n["chassis"] or n["ip"])
+            cur = merged.get(key)
+            if cur is None:
+                merged[key] = dict(n, via=[proto])
+            else:
+                for f in ("ip", "platform", "caps", "desc", "chassis", "remotePort"):
+                    if not cur.get(f) and n.get(f):
+                        cur[f] = n[f]
+                if proto not in cur["via"]:
+                    cur["via"].append(proto)
+    return list(merged.values())
+
+
+# ---------- ports, errors, PoE, CPU ----------
+
+def ports_textfsm(rows, platform):
+    rows = _up(rows)
+    out = []
+    for r in rows:
+        if platform == "cisco_s300":
+            status = "connected" if str(r.get("LINKSTATE", "")).lower() == "up" else "notconnect"
+            out.append({"port": short_if(r.get("PORT")), "status": status, "vlan": "",
+                        "speed": r.get("SPEED", ""), "duplex": r.get("DUPLEX", ""), "name": ""})
+        else:
+            status = str(r.get("STATUS", "")).lower()
+            status = {"notconnec": "notconnect", "xcvrabsen": "sfpAbsent"}.get(status, status)
+            out.append({"port": short_if(r.get("PORT")), "status": status, "vlan": r.get("VLAN_ID", ""),
+                        "speed": r.get("SPEED", ""), "duplex": r.get("DUPLEX", ""),
+                        "name": str(r.get("NAME", "")).strip()[:120]})
+    return out
+
+
+def error_counters(text):
+    """Header-driven parse of 'show interface(s) counters errors' (IOS and NX-OS).
+
+    Returns {port: receive errors}. Uses Rcv-Err (all receive errors) or FCS-Err when absent.
+    """
+    out, heads = {}, None
+    for line in (text or "").splitlines():
+        cols = line.split()
+        if not cols:
+            continue
+        if cols[0] == "Port":
+            heads = cols
+            continue
+        if not heads or set(line.strip()) <= set("- "):
+            continue
+        if len(cols) != len(heads) or not re.match(r"[A-Za-z]+[\d/]", cols[0]):
+            continue
+        row = dict(zip(heads, cols))
+        for key in ("Rcv-Err", "FCS-Err"):
+            if key in row:
+                val = to_int(row[key])
+                if val is not None:
+                    port = short_if(cols[0])
+                    out[port] = max(out.get(port, 0), val)
+                break
+    return out
+
+
+def poe_ports_ios(rows):
+    rows = _up(rows)
+    return [{"port": short_if(r.get("INTERFACE")), "oper": str(r.get("OPERATIONAL_STATUS", "")).lower(),
+             "powerW": to_float(r.get("POWER")) or 0.0, "device": str(r.get("DEVICE", "")).strip()[:80],
+             "class": str(r.get("CLASS", ""))} for r in rows]
+
+
+def poe_totals(text):
+    """(available W, used W) summed over stack members, or None if no PoE summary was found."""
+    t = text or ""
+    avail = used = 0.0
+    found = False
+    # IOS / IOS-XE: "Module   Available     Used     Remaining" then "1  740.0  45.8  694.2"
+    if re.search(r"Available\s+Used\s+Remaining", t):
+        for m in re.finditer(r"(?m)^\s*\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$", t):
+            avail += float(m.group(1))
+            used += float(m.group(2))
+            found = True
+    # SG/CBS/C1300 table: "1   On   375 Watts   18 Watts (5%)"
+    if not found:
+        for m in re.finditer(r"(?m)^\s*\d+\s+On\s+(\d+(?:\.\d+)?)\s*Watts\s+(\d+(?:\.\d+)?)\s*Watts", t):
+            avail += float(m.group(1))
+            used += float(m.group(2))
+            found = True
+    # SG300 key/value form: "Nominal Power: 180 Watts" / "Consumed Power: 10 Watts (6%)"
+    if not found:
+        noms = re.findall(r"Nominal Power\s*:\s*(\d+(?:\.\d+)?)\s*Watts", t)
+        cons = re.findall(r"Consumed Power\s*:\s*(\d+(?:\.\d+)?)\s*Watts", t)
+        if noms and cons:
+            avail, used, found = sum(map(float, noms)), sum(map(float, cons)), True
+    return (round(avail, 1), round(used, 1)) if found else None
+
+
+def poe_ports_sx(text):
+    """Tolerant per-port PoE rows for SG/CBS/C1300. Shortcut: column order differs by firmware,
+    so only port, oper state and the first decimal watt value are read; verify with captures."""
+    out = []
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*((?:gi|fa|te|ge|xg|fe)\d\S*)\s+(.*)$", line, re.I)
+        if not m:
+            continue
+        rest = m.group(2)
+        oper = re.search(r"\b(On|Off|Searching|Fault|Disabled)\b", rest)
+        watts = re.search(r"\b(\d+\.\d+)\b", rest)
+        cls = re.search(r"\b[Cc]lass\s?(\d)\b", rest)
+        out.append({"port": short_if(m.group(1)), "oper": oper.group(1).lower() if oper else "",
+                    "powerW": float(watts.group(1)) if watts else 0.0, "device": "",
+                    "class": cls.group(1) if cls else ""})
+    return out
+
+
+def cpu_percent(text):
+    """1-minute CPU % from IOS / SG-CBS output, or 100 - idle from NX-OS 'show system resources'."""
+    t = text or ""
+    m = re.search(r"one minute\s*:\s*(\d+)\s*%", t, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"CPU states\s*:.*?([\d.]+)%\s*idle", t, re.I | re.S)
+    if m:
+        return round(100 - float(m.group(1)))
+    return None
+
+
+# ---------- Aruba WLC ----------
+
+def fixed_table(text):
+    """Parse Aruba-style fixed-width tables whose header is underlined with dashes."""
+    lines = (text or "").splitlines()
+    rows = []
+    for i in range(1, len(lines)):
+        dash = lines[i]
+        if not re.fullmatch(r"\s*-+(\s+-+)+\s*", dash):
+            continue
+        header = lines[i - 1]
+        spans = [(m.start(), m.end()) for m in re.finditer(r"-+", dash)]
+        starts = [s for s, _ in spans]
+        names = []
+        for k, start in enumerate(starts):
+            end = starts[k + 1] if k + 1 < len(starts) else len(header)
+            names.append(header[start:end].strip())
+        for line in lines[i + 1:]:
+            if not line.strip() or re.match(r"\s*(Total|Num|Flags|-)", line):
+                break
+            values = []
+            for k, start in enumerate(starts):
+                end = starts[k + 1] if k + 1 < len(starts) else len(line)
+                values.append(line[start:end].strip())
+            rows.append(dict(zip(names, values)))
+        break
+    return rows
+
+
+def ap_database(rows):
+    rows = _up(rows)
+    return [{"name": r.get("AP_NAME", ""), "group": r.get("GROUP", ""), "model": r.get("AP_MODEL", ""),
+             "ip": r.get("IP_ADDRESS", ""), "status": r.get("STATUS", ""), "mac": norm_mac(r.get("MAC_ADDRESS")),
+             "serial": r.get("SERIAL", ""), "flags": r.get("FLAGS", "")} for r in rows if r.get("AP_NAME")]
+
+
+def ap_clients(rows):
+    """{ap name: client count} from 'show ap active'. Handles '11g Clients' columns and the newer
+    'Radio N Band Ch/EIRP/MaxEIRP/Clients' values ending in '/<clients>'."""
+    out = {}
+    for r in rows:
+        name = r.get("Name") or r.get("AP Name") or ""
+        if not name:
+            continue
+        total = 0
+        for key, val in r.items():
+            if "Clients" not in key:
+                continue
+            m = re.search(r"/(\d+)$", val) or re.fullmatch(r"(\d+)", val)
+            if m:
+                total += int(m.group(1))
+        out[name] = total
+    return out
+
+
+def ap_lldp(rows):
+    """{ap name: {switch, switchIp, port}} from 'show ap lldp neighbors'."""
+    out = {}
+    for r in rows:
+        name = r.get("AP") or r.get("AP Name") or ""
+        if not name or name in out:
+            continue
+        out[name] = {"switch": r.get("Neighbor", "") or r.get("Neighbor Name", ""),
+                     "switchIp": r.get("Neighbor IP", "") if is_ip(r.get("Neighbor IP", "")) else "",
+                     "port": short_if(r.get("Neighbor Port", "") or r.get("Port", ""))}
+    return out

@@ -29,14 +29,15 @@ for(const html of pages){assert.ok(html.includes('<table id="issue-table">'));as
 
 const hub=read('site/index.html');
 assert.ok(hub.includes('class="skip-link"'));assert.ok(hub.includes('role="status" aria-live="polite"'));
-assert.equal((hub.match(/aria-label="Open [^"]+ dashboard"/g)||[]).length,3);
+assert.equal((hub.match(/aria-label="Open [^"]+ dashboard"/g)||[]).length,4);
 assert.ok(!/<button(?![^>]*type="button")/.test(hub),'Hub buttons declare type="button"');
 
 assert.ok(hub.includes('<span id="env-badge" hidden>'),'Preview badge is hidden by default');assert.ok(hub.includes(String.raw`const preview=/\/dev\/(index\.html)?$/.test(location.pathname)`),'Badge only shows under /dev/');
-for(const html of pages){assert.ok(html.includes('shared/embed.js?v='),'Dashboards load the embedded-mode marker');assert.ok(html.includes('html.embedded #account-email')||html.includes('html.embedded header img,html.embedded #account-email'),'Embedded dashboards hide the hub-duplicated account');}
-assert.ok(hub.includes('<nav id="dash-tabs" aria-label="Dashboards" hidden>'));assert.equal((hub.match(/<a href="#(production-support|koha-support|uat-observations)">/g)||[]).length,3);assert.ok(hub.includes("setAttribute('aria-current','page')"));
+const network=read('site/network-monitoring/index.html');
+for(const html of [...pages,network]){assert.ok(html.includes('shared/embed.js?v='),'Dashboards load the embedded-mode marker');assert.ok(html.includes('html.embedded #account-email')||html.includes('html.embedded header img,html.embedded #account-email'),'Embedded dashboards hide the hub-duplicated account');}
+assert.ok(hub.includes('<nav id="dash-tabs" aria-label="Dashboards" hidden>'));assert.equal((hub.match(/<a href="#(production-support|koha-support|uat-observations|network-monitoring)">/g)||[]).length,4);assert.ok(hub.includes("setAttribute('aria-current','page')"));
 const tokens=new Set();
-for(const html of [hub,...pages]){for(const m of html.matchAll(/\.js\?v=([^"']+)/g))tokens.add(m[1]);for(const m of html.matchAll(/searchParams\.set\('v','([^']+)'\)/g))tokens.add(m[1]);}
+for(const html of [hub,...pages,network]){for(const m of html.matchAll(/\.js\?v=([^"']+)/g))tokens.add(m[1]);for(const m of html.matchAll(/searchParams\.set\('v','([^']+)'\)/g))tokens.add(m[1]);}
 assert.equal(tokens.size,1,'One release token across hub, pages, and shared scripts: '+[...tokens].join(', '));
 
 console.log('Passed table sorting: accessible headers, aria-sort, blanks last, no mutation; hub accessibility markup and tabs; embedded mode; single release token.');

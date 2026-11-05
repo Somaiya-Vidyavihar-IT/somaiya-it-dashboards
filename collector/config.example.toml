@@ -1,0 +1,44 @@
+# netmon configuration. Copy to C:\netmon\config.toml on the collector host and edit.
+# Never commit the real file: it names internal subnets, hosts and people.
+# Passwords are NOT stored here. Use:  python -m netmon set-password switch   (and: wlc)
+
+[collector]
+data_dir = 'C:\netmon\data'
+credential_service = "netmon"
+switch_username = "<READ_ONLY_SSH_USER>"
+wlc_username = "<READ_ONLY_WLC_USER>"     # blank = same as switch_username
+ssh_workers = 20                          # parallel SSH sessions
+scan_concurrency = 512                    # parallel TCP/22 probes during the sweep
+connect_timeout = 1.5                     # seconds per TCP/22 probe
+command_timeout = 60                      # seconds per show command
+keep_days = 30                            # snapshot, report and lost-link retention
+error_delta_threshold = 100               # receive errors per port between runs
+cpu_threshold = 80                        # percent, 1-minute average
+poe_threshold = 80                        # percent of PoE budget used
+core_hostname_pattern = ""                # regex; blank = every NX-OS (Nexus) switch is core
+seeds = []                                # extra start IPs, e.g. ["<NEXUS_MGMT_IP>"]
+exclude = []                              # CIDRs never to touch, e.g. ["<CIDR>"]
+aruba_ouis = []                           # extra AP OUIs, e.g. ["aa:bb:cc"]
+
+# One entry per management subnet (/16 to /24). The most specific match sets the institute.
+# platform: auto | cisco_ios | cisco_nxos | cisco_s300 (SG300/350/500/550, CBS350, C1300)
+# sweep = false crawls the subnet only through CDP/LLDP neighbours (useful for large /16s).
+[[subnets]]
+cidr = "10.255.0.0/23"                   # example only: use your real management subnets
+institute = "<INSTITUTE_NAME>"
+platform = "auto"
+sweep = true
+
+[wlc]
+hosts = []                                # e.g. ["<WLC_MGMT_IP>"]
+
+[server]
+host = "0.0.0.0"
+port = 8443
+cert_file = 'C:\netmon\tls\cert.pem'      # wildcard certificate chain (PEM)
+key_file = 'C:\netmon\tls\key.pem'        # private key (PEM), readable only by the service account
+google_client_id = "999197974175-pha6jti05qfs6hfr1qird7pklqgqe05s.apps.googleusercontent.com"
+allowed_origins = ["https://somaiya-vidyavihar-it.github.io"]
+allowed_domains = ["somaiya.edu"]
+network_team = ["<NETWORK_TEAM_EMAIL>@somaiya.edu"]
+python = ""                               # interpreter for Run now; blank = the one running the API

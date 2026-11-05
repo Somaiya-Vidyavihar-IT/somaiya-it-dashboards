@@ -13,6 +13,7 @@ Start with the relevant files:
 - Production mapper: `site/shared/sheet-data.js`.
 - KOHA UI and mapper: `site/koha-support/index.html`.
 - UAT Observations UI and mapper: `site/uat-observations/index.html` (contract in `AGENTS.md` → Data contracts → UAT Observations).
+- Network Monitoring UI: `site/network-monitoring/index.html`. Collector and API: `collector/` (see `collector/README.md` and `AGENTS.md` → Network Monitoring). Its data comes from the campus API, never Sheets; keep real device data out of the repo.
 - Queue sorting: `site/shared/table-sort.js`.
 - Shared authorization: `site/shared/session.js` and `site/shared/session-worker.js`.
 - Public configuration: `site/config.js`.

@@ -28,6 +28,12 @@ jobs:
         run: |
           node tests/check.cjs
           node tests/browser-flow.cjs
+          # Collector (Python) unit tests, once the branch contains collector/.
+          if [ -f collector/requirements.txt ]; then
+            python3 -m venv "$RUNNER_TEMP/netmon-venv-live"
+            "$RUNNER_TEMP/netmon-venv-live/bin/pip" install -q -r collector/requirements.txt
+            (cd collector && "$RUNNER_TEMP/netmon-venv-live/bin/python" -m unittest discover -s tests -t .)
+          fi
       - name: Check out dev (preview)
         id: dev-checkout
         continue-on-error: true
@@ -44,6 +50,12 @@ jobs:
         run: |
           node tests/check.cjs
           node tests/browser-flow.cjs
+          # Collector (Python) unit tests, once the branch contains collector/.
+          if [ -f collector/requirements.txt ]; then
+            python3 -m venv "$RUNNER_TEMP/netmon-venv-dev"
+            "$RUNNER_TEMP/netmon-venv-dev/bin/pip" install -q -r collector/requirements.txt
+            (cd collector && "$RUNNER_TEMP/netmon-venv-dev/bin/python" -m unittest discover -s tests -t .)
+          fi
       - name: Assemble site
         env:
           INCLUDE_DEV: ${{ steps.dev-check.outcome == 'success' }}

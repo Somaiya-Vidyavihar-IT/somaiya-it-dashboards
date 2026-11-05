@@ -1,0 +1,154 @@
+"""Per-device SSH collection. Sends only read-only 'show' commands; never enters config mode."""
+import logging
+import re
+
+from . import parse
+
+log = logging.getLogger("netmon.devices")
+
+# (key, command, use TextFSM). Every command must be a read-only show command.
+COMMANDS = {
+    "cisco_ios": [
+        ("version", "show version", True),
+        ("cdp", "show cdp neighbors detail", True),
+        ("lldp", "show lldp neighbors detail", True),
+        ("ports", "show interfaces status", True),
+        ("errors", "show interfaces counters errors", False),
+        ("poe", "show power inline", False),
+        ("cpu", "show processes cpu | include CPU", False),
+    ],
+    "cisco_nxos": [
+        ("version", "show version", True),
+        ("cdp", "show cdp neighbors detail", True),
+        ("lldp", "show lldp neighbors detail", True),
+        ("ports", "show interface status", True),
+        ("errors", "show interface counters errors", False),
+        ("cpu", "show system resources", False),
+    ],
+    "cisco_s300": [
+        ("version", "show version", True),
+        ("system", "show system", True),
+        ("system_id", "show system id", True),
+        ("cdp", "show cdp neighbors detail", False),
+        ("lldp", "show lldp neighbors", True),
+        ("ports", "show interfaces status", True),
+        ("poe", "show power inline", False),
+        ("cpu", "show cpu utilization", False),
+    ],
+}
+
+for _cmds in COMMANDS.values():
+    for _key, _cmd, _ in _cmds:
+        assert _cmd.startswith("show "), f"non read-only command in COMMANDS: {_cmd}"
+
+
+def _connect(device_type, ip, username, password, cfg):
+    from netmiko import ConnectHandler
+    col = cfg["collector"]
+    return ConnectHandler(
+        device_type=device_type, host=ip, username=username, password=password,
+        conn_timeout=15, auth_timeout=20, banner_timeout=20, timeout=col["command_timeout"],
+        read_timeout_override=col["command_timeout"], fast_cli=False,
+    )
+
+
+def detect_platform(ip, username, password, cfg):
+    """Log in as cisco_ios, read 'show version' and pick the driver. SG/CBS boxes that prompt
+    'User Name:' after SSH auth fail the cisco_ios login and are retried as cisco_s300."""
+    from netmiko.exceptions import NetmikoAuthenticationException
+    try:
+        conn = _connect("cisco_ios", ip, username, password, cfg)
+    except NetmikoAuthenticationException:
+        raise
+    except Exception:
+        conn = _connect("cisco_s300", ip, username, password, cfg)
+        conn.disconnect()
+        return "cisco_s300"
+    try:
+        text = conn.send_command("show version", read_timeout=cfg["collector"]["command_timeout"])
+    finally:
+        conn.disconnect()
+    return parse.classify_show_version(text) or "cisco_ios"
+
+
+def _run(conn, cmd, textfsm, timeout):
+    out = conn.send_command(cmd, use_textfsm=textfsm, read_timeout=timeout)
+    # TextFSM returns the raw string when no template matches: keep empty rows rather than guessing.
+    return (out if isinstance(out, list) else []), (out if isinstance(out, str) else "")
+
+
+def collect(ip, platform, username, password, cfg, raw_sink=None):
+    """Return a normalised device record. Never raises: failures are recorded on the record."""
+    rec = {"ip": ip, "ok": False, "error": None, "platform": platform, "warnings": [],
+           "hostname": "", "model": "", "serial": "", "version": "", "uptime": "", "mac": "",
+           "cdp": [], "lldp": [], "neighbors": [], "ports": [], "errors": None,
+           "poe": None, "poePorts": [], "cpu": None}
+    timeout = cfg["collector"]["command_timeout"]
+    try:
+        conn = _connect(platform, ip, username, password, cfg)
+    except Exception as exc:
+        rec["error"] = _short_error(exc)
+        return rec
+    results = {}
+    try:
+        for key, cmd, textfsm in COMMANDS[platform]:
+            try:
+                rows, text = _run(conn, cmd, textfsm, timeout)
+                results[key] = (rows, text)
+                if raw_sink is not None:
+                    raw_sink[cmd] = conn.send_command(cmd, read_timeout=timeout) if textfsm else text
+            except Exception as exc:
+                rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
+                results[key] = ([], "")
+    finally:
+        try:
+            conn.disconnect()
+        except Exception:
+            pass
+    _normalise(rec, platform, results)
+    rec["ok"] = bool(rec["hostname"]) or bool(rec["neighbors"]) or bool(rec["ports"])
+    if not rec["ok"]:
+        rec["error"] = "Logged in but no output could be parsed"
+    return rec
+
+
+def _normalise(rec, platform, results):
+    get = lambda k: results.get(k, ([], ""))
+    if platform == "cisco_s300":
+        rec.update(parse.version_sx(get("version")[0], get("system")[0], get("system_id")[0]))
+        rec["cdp"] = parse.cdp_detail_text(get("cdp")[1])
+    else:
+        rec.update((parse.version_nxos if platform == "cisco_nxos" else parse.version_ios)(get("version")[0]))
+        rec["cdp"] = parse.cdp_textfsm(get("cdp")[0]) or parse.cdp_detail_text(get("cdp")[1])
+    rec["lldp"] = parse.lldp_textfsm(get("lldp")[0])
+    rec["neighbors"] = parse.merge_neighbors(rec["cdp"], rec["lldp"])
+    rec["ports"] = parse.ports_textfsm(get("ports")[0], platform)
+    if platform != "cisco_s300":
+        rec["errors"] = parse.error_counters(get("errors")[1]) or None
+    poe_text = get("poe")[1]
+    if poe_text and not re.search(r"Invalid input|not supported|Unrecognized", poe_text, re.I):
+        rec["poe"] = parse.poe_totals(poe_text)
+        if platform == "cisco_s300":
+            rec["poePorts"] = parse.poe_ports_sx(poe_text)
+        else:
+            try:
+                from ntc_templates.parse import parse_output
+                rec["poePorts"] = parse.poe_ports_ios(parse_output(platform="cisco_ios", command="show power inline", data=poe_text))
+            except Exception:
+                rec["poePorts"] = []
+    rec["cpu"] = parse.cpu_percent(get("cpu")[1])
+    if not rec["hostname"] and rec["neighbors"]:
+        rec["warnings"].append("hostname not parsed")
+    rec.pop("cdp")
+    rec.pop("lldp")
+
+
+def _short_error(exc):
+    text = str(exc).strip().splitlines()
+    msg = text[0] if text else exc.__class__.__name__
+    name = exc.__class__.__name__
+    if "Authentication" in name:
+        return "SSH authentication failed"
+    if "Timeout" in name:
+        return "SSH timed out"
+    return f"{name}: {msg}"[:200]

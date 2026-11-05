@@ -1,0 +1,11 @@
+# Network collector: the real config, collected data, captures and certificates never belong in this
+# public repository. Only code, config.example.toml and synthetic test fixtures are committed.
+collector/config.toml
+collector/data/
+*.pem
+*.pfx
+*.key
+__pycache__/
+*.pyc
+.venv/
+venv/
