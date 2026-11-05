@@ -144,6 +144,28 @@ Name        Group    IP Address   Radio 0 Band Ch/EIRP/MaxEIRP/Clients  Radio 1 
 ap-hall-01  campus   10.60.1.11   AP:5GHz-HE:36/18/24/7                 AP:2.4GHz-HE:1/12/24/2
 """
 
+NXOS_INTERFACE_STATUS = """
+--------------------------------------------------------------------------------
+Port          Name               Status    Vlan      Duplex  Speed   Type
+--------------------------------------------------------------------------------
+mgmt0         --                 connected routed    full    1000    --
+Eth1/1        UPLINK TO DSW 01   connected trunk     full    10G     10Gbase-SR
+Eth1/37       --                 inactive  30        auto    auto    1000base-T
+Eth1/38       --                 err-disab 1         auto    auto    1000base-T
+Eth1/39       --                 notconnec 1         auto    auto    1000base-T
+Eth1/49       --                 xcvrAbsen 1         auto    auto    --
+"""
+
+ARUBA_AP_DATABASE_LONG = """AP Database
+-----------
+Name        Group    AP Type  IP Address   Status        Flags  Switch IP    Standby IP  Wired MAC Address  Serial #    Port  FQLN  Outer IP  User
+----        -----    -------  ----------   ------        -----  ---------    ----------  -----------------  --------    ----  ----  --------  ----
+ap-lib-01   campus   515      10.60.0.11   Up 3d:4h:1m   2      10.0.0.5     0.0.0.0     20:4c:03:00:00:01  CNTEST0001  N/A   N/A   N/A
+ap-hall-09  campus   303      10.60.0.19   Down          N      10.0.0.5     0.0.0.0     20:4c:03:00:00:09  CNTEST0009  N/A   N/A   N/A
+
+Total APs:2
+"""
+
 ARUBA_AP_LLDP = """AP LLDP Neighbors
 -----------------
 AP          Interface  Neighbor      Neighbor IP  Neighbor Port

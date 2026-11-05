@@ -202,6 +202,46 @@ def ports_textfsm(rows, platform):
     return out
 
 
+PORT_STATUSES = ("connected", "notconnect", "notconnec", "err-disabled", "disabled", "inactive", "sfpAbsent",
+                 "xcvrAbsen", "noOperMem", "channelDo", "suspended", "suspnd", "monitoring", "down", "up", "linkFlapE",
+                 "err-disab")
+
+
+def ports_status_text(text):
+    """Fallback for 'show interface(s) status' (IOS / NX-OS) when the TextFSM template fails.
+
+    Columns are sliced at the header's word positions (Port, Name, Status, Vlan, Duplex, Speed, Type),
+    so descriptions with spaces are fine. Any status word is accepted, including NX-OS 'inactive'.
+    """
+    lines = (text or "").splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        if not (line.startswith("Port") and "Status" in line and "Vlan" in line):
+            continue
+        heads = [(m.group(0), m.start()) for m in re.finditer(r"\S+", line)]
+        starts = [s for _, s in heads]
+        names = [h for h, _ in heads]
+        for row in lines[i + 1:]:
+            if not re.match(r"[A-Za-z]+[\d/]", row):
+                continue
+            vals = {}
+            for k, name in enumerate(names):
+                end = starts[k + 1] if k + 1 < len(starts) else len(row)
+                vals[name] = row[starts[k]:end].strip()
+            status = vals.get("Status", "")
+            # Long descriptions can push Status right; recover it from the tokens if the slice missed.
+            if status not in PORT_STATUSES:
+                found = next((t for t in row.split()[1:] if t in PORT_STATUSES), "")
+                status = found or status
+            status = {"notconnec": "notconnect", "xcvrAbsen": "sfpAbsent", "suspnd": "suspended",
+                      "err-disab": "err-disabled"}.get(status, status)
+            out.append({"port": short_if(row.split()[0]), "status": status, "vlan": vals.get("Vlan", ""),
+                        "speed": vals.get("Speed", ""), "duplex": vals.get("Duplex", ""),
+                        "name": "" if vals.get("Name", "") == "--" else vals.get("Name", "")[:120]})
+        break
+    return out
+
+
 def error_counters(text):
     """Header-driven parse of 'show interface(s) counters errors' (IOS and NX-OS).
 
@@ -327,6 +367,21 @@ def ap_database(rows):
     return [{"name": r.get("AP_NAME", ""), "group": r.get("GROUP", ""), "model": r.get("AP_MODEL", ""),
              "ip": r.get("IP_ADDRESS", ""), "status": r.get("STATUS", ""), "mac": norm_mac(r.get("MAC_ADDRESS")),
              "serial": r.get("SERIAL", ""), "flags": r.get("FLAGS", "")} for r in rows if r.get("AP_NAME")]
+
+
+def ap_database_table(rows):
+    """Fallback for 'show ap database long' read with fixed_table (Aruba column headings)."""
+    get = lambda r, *keys: next((r[k] for k in keys if r.get(k)), "")
+    out = []
+    for r in rows:
+        name = get(r, "Name", "AP Name")
+        if not name:
+            continue
+        out.append({"name": name, "group": get(r, "Group"), "model": get(r, "AP Type", "Model"),
+                    "ip": get(r, "IP Address"), "status": get(r, "Status"),
+                    "mac": norm_mac(get(r, "Wired MAC Address", "Wired MAC", "MAC Address")),
+                    "serial": get(r, "Serial #", "Serial"), "flags": get(r, "Flags")})
+    return out
 
 
 def ap_clients(rows):

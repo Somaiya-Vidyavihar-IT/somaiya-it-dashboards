@@ -72,10 +72,23 @@ def detect_platform(ip, username, password, cfg):
     return parse.classify_show_version(text) or "cisco_ios"
 
 
-def _run(conn, cmd, textfsm, timeout):
-    out = conn.send_command(cmd, use_textfsm=textfsm, read_timeout=timeout)
-    # TextFSM returns the raw string when no template matches: keep empty rows rather than guessing.
-    return (out if isinstance(out, list) else []), (out if isinstance(out, str) else "")
+def _run(conn, cmd, textfsm, timeout, platform, warnings):
+    """Send once, keep the raw text, then try the TextFSM template. A template that meets output it
+    does not expect (e.g. NX-OS status 'inactive') raises; we keep the text for fallback parsers
+    instead of losing the whole command."""
+    text = conn.send_command(cmd, read_timeout=timeout)
+    return parse_rows(platform, cmd, text, warnings) if textfsm else [], text
+
+
+def parse_rows(platform, cmd, text, warnings):
+    try:
+        from ntc_templates.parse import parse_output
+        rows = parse_output(platform=platform, command=cmd, data=text)
+        return rows if isinstance(rows, list) else []
+    except Exception as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+        warnings.append(f"{cmd}: template could not read the output ({exc.__class__.__name__}: {first[:120]}); used fallback")
+        return []
 
 
 def collect(ip, platform, username, password, cfg, raw_sink=None):
@@ -94,10 +107,10 @@ def collect(ip, platform, username, password, cfg, raw_sink=None):
     try:
         for key, cmd, textfsm in COMMANDS[platform]:
             try:
-                rows, text = _run(conn, cmd, textfsm, timeout)
+                rows, text = _run(conn, cmd, textfsm, timeout, platform, rec["warnings"])
                 results[key] = (rows, text)
                 if raw_sink is not None:
-                    raw_sink[cmd] = conn.send_command(cmd, read_timeout=timeout) if textfsm else text
+                    raw_sink[cmd] = text
             except Exception as exc:
                 rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
                 results[key] = ([], "")
@@ -123,7 +136,7 @@ def _normalise(rec, platform, results):
         rec["cdp"] = parse.cdp_textfsm(get("cdp")[0]) or parse.cdp_detail_text(get("cdp")[1])
     rec["lldp"] = parse.lldp_textfsm(get("lldp")[0])
     rec["neighbors"] = parse.merge_neighbors(rec["cdp"], rec["lldp"])
-    rec["ports"] = parse.ports_textfsm(get("ports")[0], platform)
+    rec["ports"] = parse.ports_textfsm(get("ports")[0], platform) or parse.ports_status_text(get("ports")[1])
     if platform != "cisco_s300":
         rec["errors"] = parse.error_counters(get("errors")[1]) or None
     poe_text = get("poe")[1]

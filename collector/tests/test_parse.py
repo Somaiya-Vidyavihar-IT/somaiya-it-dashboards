@@ -73,6 +73,22 @@ class CustomParsers(unittest.TestCase):
         lldp = parse.ap_lldp(parse.fixed_table(fx.ARUBA_AP_LLDP))
         self.assertEqual(lldp, {"ap-lib-01": {"switch": "asw-test-02", "switchIp": "10.0.1.2", "port": "Gi1/0/1"}})
 
+    def test_interface_status_fallback_reads_every_status(self):
+        rows = {r["port"]: r for r in parse.ports_status_text(fx.NXOS_INTERFACE_STATUS)}
+        self.assertEqual([rows[p]["status"] for p in ("Eth1/1", "Eth1/37", "Eth1/38", "Eth1/39", "Eth1/49")],
+                         ["connected", "inactive", "err-disabled", "notconnect", "sfpAbsent"])
+        self.assertEqual(rows["Eth1/1"]["name"], "UPLINK TO DSW 01")
+        self.assertEqual((rows["Eth1/37"]["vlan"], rows["Eth1/1"]["speed"]), ("30", "10G"))
+        self.assertEqual(rows["Eth1/37"]["name"], "")
+        self.assertEqual(len(rows), 6)
+
+    def test_aruba_ap_database_fallback(self):
+        aps = parse.ap_database_table(parse.fixed_table(fx.ARUBA_AP_DATABASE_LONG))
+        self.assertEqual([(a["name"], a["model"], a["ip"], a["serial"], a["mac"]) for a in aps],
+                         [("ap-lib-01", "515", "10.60.0.11", "CNTEST0001", "20:4c:03:00:00:01"),
+                          ("ap-hall-09", "303", "10.60.0.19", "CNTEST0009", "20:4c:03:00:00:09")])
+        self.assertTrue(aps[0]["status"].startswith("Up"))
+
     def test_merge_neighbors_records_both_protocols(self):
         cdp = [parse._nbr("Te1/0/1", "dsw-test-01.example.local", "10.0.1.1", "Te1/1/4", caps="Router Switch")]
         lldp = [parse._nbr("TenGigabitEthernet1/0/1", "dsw-test-01", "", "Te1/1/4", chassis="00aa.bbcc.dd99")]
@@ -98,6 +114,19 @@ class TextFsmNormalisers(unittest.TestCase):
         custom = parse.cdp_detail_text(fx.IOS_CDP_DETAIL)
         key = lambda n: (n["name"], n["ip"], n["localPort"], n["remotePort"])
         self.assertEqual([key(n) for n in rows], [key(n) for n in custom])
+
+    def test_template_failure_is_contained(self):
+        """Regression (live Nexus capture, 2026-11-05): the NX-OS template raises on status 'inactive'.
+        parse_rows must turn that into a warning, and the device record must still get its ports."""
+        from netmon import devices
+        warnings = []
+        rows = devices.parse_rows("cisco_nxos", "show interface status", fx.NXOS_INTERFACE_STATUS, warnings)
+        self.assertEqual(rows, [])
+        self.assertTrue(warnings and "used fallback" in warnings[0], warnings)
+        rec = {"warnings": [], "hostname": ""}
+        results = {"ports": (rows, fx.NXOS_INTERFACE_STATUS)}
+        devices._normalise(rec, "cisco_nxos", results)
+        self.assertEqual(len(rec["ports"]), 6)
 
     def test_ios_poe_ports(self):
         rows = parse.poe_ports_ios(parse_output(platform="cisco_ios", command="show power inline", data=fx.IOS_POE))

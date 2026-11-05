@@ -38,7 +38,11 @@ $newConfig = -not (Test-Path "$Root\config.toml")
 if ($newConfig) { Copy-Item "$src\config.example.toml" "$Root\config.toml" }
 
 Write-Host '5/5 Restricting C:\netmon (it will hold the certificate key and network data)...'
-if ($ServiceAccount) {
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($ServiceAccount -and -not $isAdmin) {
+  # Updates can run from the svc-netmon window; only an Administrator may change folder permissions.
+  Write-Warning 'Not running as Administrator: folder permissions left unchanged (they were set at the first install).'
+} elseif ($ServiceAccount) {
   & icacls $Root /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' "${ServiceAccount}:(OI)(CI)M" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Could not set permissions for $ServiceAccount. Check the account name (e.g. $env:COMPUTERNAME\svc-netmon)." }
 } else {

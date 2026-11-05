@@ -1,6 +1,6 @@
 """Aruba AOS 8 controller collection (read-only show commands)."""
 from . import parse
-from .devices import _connect, _short_error
+from .devices import _connect, _short_error, parse_rows
 
 COMMANDS = [
     ("database", "show ap database long", True),
@@ -23,10 +23,10 @@ def collect(host, username, password, cfg, raw_sink=None):
     try:
         for key, cmd, textfsm in COMMANDS:
             try:
-                res = conn.send_command(cmd, use_textfsm=textfsm, read_timeout=max(timeout, 120))
-                out[key] = res
+                text = conn.send_command(cmd, read_timeout=max(timeout, 120))
+                out[key] = (parse_rows("aruba_os", cmd, text, rec["warnings"]) if textfsm else [], text)
                 if raw_sink is not None:
-                    raw_sink[cmd] = res if isinstance(res, str) else conn.send_command(cmd, read_timeout=max(timeout, 120))
+                    raw_sink[cmd] = text
             except Exception as exc:
                 rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
     finally:
@@ -34,10 +34,10 @@ def collect(host, username, password, cfg, raw_sink=None):
             conn.disconnect()
         except Exception:
             pass
-    db = out.get("database")
-    rec["aps"] = parse.ap_database(db) if isinstance(db, list) else []
-    rec["clients"] = parse.ap_clients(parse.fixed_table(out.get("active") or ""))
-    rec["apLldp"] = parse.ap_lldp(parse.fixed_table(out.get("lldp") or ""))
+    db_rows, db_text = out.get("database", ([], ""))
+    rec["aps"] = parse.ap_database(db_rows) or parse.ap_database_table(parse.fixed_table(db_text))
+    rec["clients"] = parse.ap_clients(parse.fixed_table(out.get("active", ([], ""))[1]))
+    rec["apLldp"] = parse.ap_lldp(parse.fixed_table(out.get("lldp", ([], ""))[1]))
     rec["ok"] = bool(rec["aps"])
     if not rec["ok"]:
         rec["error"] = "No APs parsed from 'show ap database long'"
