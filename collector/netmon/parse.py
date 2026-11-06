@@ -103,13 +103,24 @@ def version_sx(version_rows, system_rows, system_id_rows, version_text="", syste
         m = re.search(r"Serial number[^\n]*\n\s*-[- ]+\n\s*\d+\s+(\S+)", system_id_text or "", re.I)
         serial = m.group(1) if m else sid.get("SERIAL_NUMBER", "")
     return {
+        # No System Name line on SG500X stack firmware (seen live); devices.collect then uses the prompt.
         "hostname": grab(r"^\s*System Name:\s*(\S+)", system_text) or s.get("HOSTNAME", ""),
         "version": grab(r"SW version\s+(\d+(?:\.\d+)+)", version_text) or grab(r"Version:\s*(\d+(?:\.\d+)+)", version_text)
-        or v.get("SW_VERSION", ""),
-        "model": desc.split()[0] if desc else "", "serial": serial,
-        "uptime": grab(r"System Up Time\s*\([^)]*\)\s*:\s*(\S+)", system_text) or s.get("UP_TIME", ""),
+        or unit_value(version_text, "SW version") or v.get("SW_VERSION", ""),
+        "model": desc.split()[0] if desc else unit_value(system_text, "Type"), "serial": serial,
+        "uptime": grab(r"System Up Time\s*\([^)]*\)\s*:\s*(\S+)", system_text) or unit_value(system_text, "Up time")
+        or s.get("UP_TIME", ""),
         "mac": norm_mac(grab(r"System MAC Address:\s*(\S+)", system_text) or s.get("MAC_ADDRESS", "")),
     }
+
+
+def unit_value(text, column):
+    """First stack unit's value in a per-unit table ('Unit | SW version | …', 'Unit | Type',
+    'Unit | Up time'), as printed by SG500X stack firmware 1.4 (seen live)."""
+    for r in fixed_table(text):
+        if r.get("Unit", "").isdigit() and r.get(column):
+            return r[column]
+    return ""
 
 
 def platform_hint(text):

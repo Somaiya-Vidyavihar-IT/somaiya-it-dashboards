@@ -176,9 +176,12 @@ def _capture(cfg, args):
         learned = (store.read("state", "platforms.json", default={}) or {}).get(args.ip)
         known_set = (store.read("state", "credentials.json", default={}) or {}).get(args.ip)
         sets = sorted(sets, key=lambda s: s[0] != known_set)
-        target, platform, rec, errors = args.ip, args.platform, None, []
+        target, platform, rec, errors, logs = args.ip, args.platform, None, [], []
         for name, user, pw in sets:
             raw.clear()
+            # Login trace per credential set, to see where a stalled login stops.
+            cfg["collector"]["_session_log"] = store.path("captures", f"login-{args.ip}-{name}-{stamp()}.log")
+            logs.append(cfg["collector"]["_session_log"])
             try:
                 platform = args.platform if args.platform != "auto" else learned or devices.detect_platform(args.ip, user, pw, cfg)
             except Exception as exc:
@@ -193,7 +196,11 @@ def _capture(cfg, args):
                 continue
             print(f"Logged in with credential set {name} as {platform}")
             break
+        cfg["collector"].pop("_session_log", None)
         if rec is None:
+            print("Login traces (what the switch printed; passwords are masked):")
+            for log_path in logs:
+                print(f"  {log_path}")
             raise SystemExit(f"Could not log in to {args.ip}: " + "; ".join(errors))
     path = store.path("captures", f"capture-{target}-{stamp()}.txt")
     with open(path, "w", encoding="utf-8") as fh:

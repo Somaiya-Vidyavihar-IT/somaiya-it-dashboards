@@ -129,6 +129,22 @@ class CustomParsers(unittest.TestCase):
         self.assertEqual(sorted(raw), sorted(sent), "capture keeps the raw per-port output")
         self.assertTrue(all(c.startswith("show lldp neighbors ") for c in sent))
 
+    def test_sg500x_per_unit_tables_and_prompt_hostname(self):
+        """Regression (live SG500X distributions): name, model and version came out empty."""
+        ident = parse.version_sx([], [], [], fx.SG500X_VERSION, fx.SG500X_SYSTEM, fx.CBS_SYSTEM_ID)
+        self.assertEqual((ident["model"], ident["version"], ident["uptime"], ident["serial"]),
+                         ("SG500X-24", "1.4.11.2", "05,20:52:32", "FOCTEST0002"))
+        self.assertEqual(ident["hostname"], "")
+        from unittest import mock
+        from netmon import config, devices
+        cfg = config.validate({"collector": {"switch_username": "u"}, "subnets": [{"cidr": "10.0.0.0/24"}]})
+        conn = mock.Mock(base_prompt="dsw-test-sg500x")
+        texts = {"show version": fx.SG500X_VERSION, "show system": fx.SG500X_SYSTEM}
+        conn.send_command.side_effect = lambda cmd, **kw: texts.get(cmd, "")
+        with mock.patch.object(devices, "_connect", return_value=conn):
+            rec = devices.collect("10.0.0.9", "cisco_s300", "u", "p", cfg)
+        self.assertEqual((rec["hostname"], rec["model"]), ("dsw-test-sg500x", "SG500X-24"), "hostname from the CLI prompt")
+
     def test_cbs_poe_table(self):
         self.assertEqual(parse.poe_totals(fx.CBS_POE), (370.0, 183.0))
         ports = {p["port"]: (p["oper"], p["powerW"], p["class"]) for p in parse.poe_ports_sx(fx.CBS_POE)}

@@ -48,6 +48,9 @@ def _connect(device_type, ip, username, password, cfg):
     kwargs = dict(host=ip, port=col.get("ssh_port", 22), username=username, password=password, conn_timeout=15,
                   auth_timeout=20, banner_timeout=20, timeout=col["command_timeout"],
                   read_timeout_override=col["command_timeout"], fast_cli=False)
+    if col.get("_session_log"):
+        # capture only: what the switch prints during login (reads only; netmiko masks the password).
+        kwargs.update(session_log=col["_session_log"], session_log_file_mode="append")
     if device_type == "cisco_s300":
         # SG/CBS/C1300: our driver also completes the in-band "User Name:" login (see sx.py).
         from .sx import SxSSH
@@ -129,6 +132,11 @@ def collect(ip, platform, username, password, cfg, raw_sink=None):
                 rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
                 results[key] = ([], "")
         _normalise(rec, platform, results)
+        prompt = getattr(conn, "base_prompt", "")
+        if not rec["hostname"] and isinstance(prompt, str) and prompt.strip():
+            # The CLI prompt is the hostname (SG500X stack firmware prints no System Name line).
+            rec["hostname"] = prompt.strip()
+            rec["warnings"] = [w for w in rec["warnings"] if w != "hostname not parsed"]
         if platform == "cisco_s300":
             lldp_details_sx(conn, rec, timeout, raw_sink)
     finally:

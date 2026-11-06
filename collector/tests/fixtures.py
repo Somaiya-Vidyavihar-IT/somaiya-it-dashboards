@@ -280,6 +280,28 @@ gi12       Auto       On          0.798             0                    low
 gi14       Auto       Searching   0.0               -                    low
 """
 
+# SG500X stack firmware 1.4 (seen live): per-unit tables and no System Name line.
+SG500X_VERSION = """
+       Unit             SW version         Boot version         HW version
+------------------- ------------------- ------------------- -------------------
+         1               1.4.11.2            1.4.0.02               V02
+"""
+
+SG500X_SYSTEM = """
+Unit          Type
+---- ----------------------
+ 1         SG500X-24
+
+Unit   FAN
+       Status
+----   ---------
+ 1        OK
+
+Unit     Up time
+---- ---------------
+ 1     05,20:52:32
+"""
+
 # 'show lldp neighbors <port>' on SG/CBS: the two documented layouts (no live capture yet).
 SX_LLDP_PORT_SIMPLE = """
 Device ID: 00:11:22:00:00:01

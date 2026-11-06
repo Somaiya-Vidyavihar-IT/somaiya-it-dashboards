@@ -144,6 +144,23 @@ class LiveSxLogin(unittest.TestCase):
         self.assertEqual(self.detect("inband"), "cisco_s300")
         self.assertEqual(self.detect("password"), "cisco_s300")
 
+    def test_login_trace_records_the_switch_but_never_the_password(self):
+        import os
+        import tempfile
+        from netmon.config import validate
+        port = self.start("inband")
+        fd, log = tempfile.mkstemp(suffix=".log")
+        os.close(fd)
+        self.addCleanup(os.remove, log)
+        cfg = validate({"collector": {"switch_username": "u", "ssh_port": port, "command_timeout": 20, "_session_log": log},
+                        "subnets": [{"cidr": "10.0.0.0/24"}]})
+        conn = devices._connect("cisco_s300", "127.0.0.1", "fixture-user", "right", cfg)
+        conn.disconnect()
+        with open(log, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        self.assertIn("User Name:", text)
+        self.assertNotIn("right", text)
+
     def test_detection_wrong_password_is_an_auth_failure(self):
         from netmiko.exceptions import NetmikoAuthenticationException
         with self.assertRaises(NetmikoAuthenticationException):
