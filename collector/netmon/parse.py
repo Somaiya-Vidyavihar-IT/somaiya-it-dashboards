@@ -246,6 +246,26 @@ def lldp_summary_sx(text):
     return out
 
 
+IPV4 = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+
+def lldp_port_detail_sx(text):
+    """'show lldp neighbors <port>' on SG/CBS/C1300 → {ip, caps, name, desc}.
+
+    Shortcut: written from Cisco's documented layouts, not yet a live capture. It accepts both
+    'Management address: 10.0.0.5' and a 'Management Address Information' block with
+    'Address Subtype: IPv4' / 'Address: 10.0.0.5'. Upgrade once a real capture is checked."""
+    t = text or ""
+    ip = ""
+    m = re.search(r"Management\s+Address", t, re.I)
+    if m:  # first IPv4 shortly after the heading, skipping IPv6 / ifIndex lines
+        found = IPV4.search(t[m.end():m.end() + 300])
+        ip = found.group(1) if found else ""
+    grab = lambda pattern: (re.search(pattern, t, re.I | re.M) or [None, ""])[1].strip()
+    return {"ip": ip if is_ip(ip) else "", "caps": grab(r"^\s*(?:System\s+)?Capabilities\s*:\s*(.+)$"),
+            "name": grab(r"^\s*System Name\s*:\s*(.+)$"), "desc": grab(r"^\s*System Description\s*:\s*(.+)$")}
+
+
 def merge_neighbors(cdp, lldp):
     """One entry per (local port, neighbour); 'via' records which protocols saw it."""
     merged = {}

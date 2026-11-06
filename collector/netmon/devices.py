@@ -116,16 +116,52 @@ def collect(ip, platform, username, password, cfg, raw_sink=None):
             except Exception as exc:
                 rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
                 results[key] = ([], "")
+        _normalise(rec, platform, results)
+        if platform == "cisco_s300":
+            lldp_details_sx(conn, rec, timeout, raw_sink)
     finally:
         try:
             conn.disconnect()
         except Exception:
             pass
-    _normalise(rec, platform, results)
     rec["ok"] = bool(rec["hostname"]) or bool(rec["neighbors"]) or bool(rec["ports"])
     if not rec["ok"]:
         rec["error"] = "Logged in but no output could be parsed"
     return rec
+
+
+SX_PORT = re.compile(r"(gi|te|fa|xg|ge)\d+(/\d+){0,2}")
+MAX_PORT_LOOKUPS = 48
+
+
+def lldp_details_sx(conn, rec, timeout, raw_sink=None):
+    """SG/CBS 'show lldp neighbors' has no management IP, so switches seen only there could not be
+    crawled (seen live: 68). For each such switch-like neighbour, read 'show lldp neighbors <port>'
+    once and take its management IP. Read-only; the port name must look like an SG/CBS port."""
+    from .build import neighbor_kind
+    todo = [n for n in rec["neighbors"] if not n["ip"] and "lldp" in n.get("via", []) and neighbor_kind(n) == "switch"]
+    for n in todo[:MAX_PORT_LOOKUPS]:
+        port = n["localPort"].lower()
+        if not SX_PORT.fullmatch(port):  # never build a command from unexpected text
+            continue
+        cmd = f"show lldp neighbors {port}"
+        assert cmd.startswith("show ")
+        try:
+            text = conn.send_command(cmd, read_timeout=timeout)
+        except Exception as exc:
+            rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
+            continue
+        if raw_sink is not None:
+            raw_sink[cmd] = text
+        info = parse.lldp_port_detail_sx(text)
+        if info["ip"]:
+            n["ip"] = info["ip"]
+        if info["caps"] and not n["caps"]:
+            n["caps"] = info["caps"]
+        if info["desc"] and not n["desc"]:
+            n["desc"] = info["desc"][:300]
+    if len(todo) > MAX_PORT_LOOKUPS:
+        rec["warnings"].append(f"{len(todo) - MAX_PORT_LOOKUPS} LLDP neighbours not looked up (limit {MAX_PORT_LOOKUPS})")
 
 
 def _normalise(rec, platform, results):

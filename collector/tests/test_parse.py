@@ -100,6 +100,35 @@ class CustomParsers(unittest.TestCase):
         self.assertEqual((cbs["hostname"], cbs["model"], cbs["version"], cbs["serial"], cbs["mac"], cbs["uptime"]),
                          ("asw-test-cbs", "CBS350-24FP-4G", "3.2.1.1", "FOCTEST0002", "40:14:82:00:00:78", "86,05:32:10"))
 
+    def test_sx_lldp_port_detail_both_layouts(self):
+        a = parse.lldp_port_detail_sx(fx.SX_LLDP_PORT_SIMPLE)
+        self.assertEqual((a["ip"], a["caps"], a["name"]), ("10.0.28.21", "Bridge, Router", "asw-test-hpc-01"))
+        b = parse.lldp_port_detail_sx(fx.SX_LLDP_PORT_BLOCK)
+        self.assertEqual((b["ip"], b["caps"]), ("10.0.28.22", "B, R"), "IPv6 and ifIndex lines are skipped")
+        self.assertEqual(parse.lldp_port_detail_sx("% No neighbors found")["ip"], "")
+
+    def test_lookup_fills_ips_for_lldp_only_switches_and_stays_read_only(self):
+        """Regression (live): 68 switches were seen only in SG/CBS LLDP summaries, which carry no IP."""
+        from netmon import devices
+        rec = {"warnings": [], "neighbors": parse.merge_neighbors([], parse.lldp_summary_sx(fx.SX_LLDP_SUMMARY_REAL))}
+        bad = parse._nbr("gi1; reload", "evil", "", "gi1", caps="B")  # device-supplied text must never become a command
+        bad["via"] = ["lldp"]
+        rec["neighbors"].append(bad)
+        sent, raw = [], {}
+
+        class Conn:
+            def send_command(self, cmd, read_timeout=None):
+                sent.append(cmd)
+                return fx.SX_LLDP_PORT_SIMPLE if cmd.endswith("gi21") else fx.SX_LLDP_PORT_BLOCK
+
+        devices.lldp_details_sx(Conn(), rec, 10, raw)
+        self.assertEqual(sent, ["show lldp neighbors gi21", "show lldp neighbors gi25", "show lldp neighbors gi27"],
+                         "switches only: not the AP (W), the 'O' device, or a malformed port")
+        ips = {n["localPort"]: n["ip"] for n in rec["neighbors"]}
+        self.assertEqual((ips["Gi21"], ips["Gi25"], ips["Gi24"]), ("10.0.28.21", "10.0.28.22", ""))
+        self.assertEqual(sorted(raw), sorted(sent), "capture keeps the raw per-port output")
+        self.assertTrue(all(c.startswith("show lldp neighbors ") for c in sent))
+
     def test_cbs_poe_table(self):
         self.assertEqual(parse.poe_totals(fx.CBS_POE), (370.0, 183.0))
         ports = {p["port"]: (p["oper"], p["powerW"], p["class"]) for p in parse.poe_ports_sx(fx.CBS_POE)}

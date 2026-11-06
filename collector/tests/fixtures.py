@@ -280,6 +280,34 @@ gi12       Auto       On          0.798             0                    low
 gi14       Auto       Searching   0.0               -                    low
 """
 
+# 'show lldp neighbors <port>' on SG/CBS: the two documented layouts (no live capture yet).
+SX_LLDP_PORT_SIMPLE = """
+Device ID: 00:11:22:00:00:01
+Port ID: gi24
+Capabilities: Bridge, Router
+System Name: asw-test-hpc-01
+System description: CBS350-24P-4G 24-Port Gigabit PoE Managed Switch
+Port description:
+Management address: 10.0.28.21
+Time To Live: 107 seconds
+"""
+
+SX_LLDP_PORT_BLOCK = """
+Device ID: 00:11:22:00:00:02
+Port ID: gi24
+System Name: asw-test-hpc-02
+Capabilities: B, R
+System description: SG350-28 28-Port Gigabit Managed Switch
+
+Management Address Information
+  Address Subtype: IPv6
+  Address: fe80::211:22ff:fe00:2
+  Address Subtype: IPv4
+  Address: 10.0.28.22
+  Interface Subtype: ifIndex
+  Interface Number: 100000
+"""
+
 # Real AOS 8 layout (2026-11-05 capture), invented values: "Neighbor" is an index, the switch is
 # "Chassis Name/ID", and "Not received" marks fields the switch did not send.
 ARUBA_AP_LLDP = """AP LLDP Neighbors (Updated every 60 seconds)
