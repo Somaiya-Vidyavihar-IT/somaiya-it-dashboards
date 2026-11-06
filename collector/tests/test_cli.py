@@ -69,6 +69,27 @@ class Cli(unittest.TestCase):
         self.assertLess(t._preferred_kex.index(modern[0]), t._preferred_kex.index("diffie-hellman-group1-sha1"),
                         "modern key exchange must stay preferred")
 
+    def test_capture_uses_what_the_full_run_learned(self):
+        """Regression (live): capture probed from scratch and timed out on a switch the run reads fine."""
+        import types
+        from netmon.store import Store
+        store = Store(self.cfg["collector"]["data_dir"])
+        store.write({"10.0.0.9": "cisco_s300"}, "state", "platforms.json")
+        store.write({"10.0.0.9": "set2"}, "state", "credentials.json")
+        calls = []
+
+        def collect(ip, platform, user, pw, cfg, raw_sink=None):
+            calls.append((platform, user))
+            return {"ok": True, "error": None, "warnings": [], "hostname": "h", "model": "m", "serial": "s",
+                    "version": "v", "neighbors": [], "ports": [], "poe": None, "cpu": None}
+        args = types.SimpleNamespace(wlc=None, ip="10.0.0.9", platform="auto", cred_set="")
+        with mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u1", "p1"), ("set2", "u2", "p2")]), \
+                mock.patch("netmon.devices.detect_platform") as detect, \
+                mock.patch("netmon.devices.collect", side_effect=collect), mock.patch("builtins.print"):
+            self.assertEqual(cli._capture(self.cfg, args), 0)
+        detect.assert_not_called()
+        self.assertEqual(calls, [("cisco_s300", "u2")], "learned driver and learned account first")
+
     def test_store_rejects_unknown_set(self):
         with self.assertRaises(creds.CredentialError):
             creds.store(self.cfg, "switch", "x", "set9")

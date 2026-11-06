@@ -45,8 +45,8 @@ for _cmds in COMMANDS.values():
 
 def _connect(device_type, ip, username, password, cfg):
     col = cfg["collector"]
-    kwargs = dict(host=ip, username=username, password=password, conn_timeout=15, auth_timeout=20,
-                  banner_timeout=20, timeout=col["command_timeout"],
+    kwargs = dict(host=ip, port=col.get("ssh_port", 22), username=username, password=password, conn_timeout=15,
+                  auth_timeout=20, banner_timeout=20, timeout=col["command_timeout"],
                   read_timeout_override=col["command_timeout"], fast_cli=False)
     if device_type == "cisco_s300":
         # SG/CBS/C1300: our driver also completes the in-band "User Name:" login (see sx.py).
@@ -57,21 +57,33 @@ def _connect(device_type, ip, username, password, cfg):
 
 
 def detect_platform(ip, username, password, cfg):
-    """Log in as cisco_ios, read 'show version' and pick the driver. SG/CBS/C1300 switches without
-    'ip ssh password-auth' refuse that login (or stall at an in-band "User Name:" prompt), so any
-    failure is retried once with the SG/CBS driver; if that is refused too, the error is the
-    SG/CBS one, so a wrong password is still reported as an authentication failure."""
+    """Pick the driver by logging in once and reading 'show version'.
+
+    The probe uses the SG/CBS driver: it completes every login style (SSH password, keyboard-
+    interactive and the in-band "User Name:" prompt) and also works on Catalyst and Nexus. Probing
+    with the Catalyst driver first hung on SG/CBS switches and left them busy (seen live: 16 login
+    timeouts, all on switches with no model hint). Output is read on a quiet-period basis, so a
+    '--More--' pager on IOS/NX-OS cannot stall it. Only if that login fails for a reason other than
+    the credentials is the Catalyst driver tried."""
+    from netmiko.exceptions import NetmikoAuthenticationException
+    timeout = cfg["collector"]["command_timeout"]
     try:
-        conn = _connect("cisco_ios", ip, username, password, cfg)
-    except Exception:
         conn = _connect("cisco_s300", ip, username, password, cfg)
-        conn.disconnect()
-        return "cisco_s300"
+    except NetmikoAuthenticationException:
+        raise  # wrong credentials: let the caller try the next set, without a second failed login
+    except Exception:
+        conn = _connect("cisco_ios", ip, username, password, cfg)
+        try:
+            text = conn.send_command("show version", read_timeout=timeout)
+        finally:
+            conn.disconnect()
+        return parse.classify_show_version(text) or "cisco_ios"
     try:
-        text = conn.send_command("show version", read_timeout=cfg["collector"]["command_timeout"])
+        conn.send_command_timing("terminal length 0", read_timeout=timeout)  # IOS/NX-OS paging; SG/CBS ignore it
+        text = conn.send_command_timing("show version", read_timeout=timeout)
     finally:
         conn.disconnect()
-    return parse.classify_show_version(text) or "cisco_ios"
+    return parse.classify_show_version(text) or "cisco_s300"
 
 
 def _run(conn, cmd, textfsm, timeout, platform, warnings):

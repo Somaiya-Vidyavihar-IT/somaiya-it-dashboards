@@ -97,6 +97,27 @@ class FullRunOrchestration(unittest.TestCase):
             self.assertEqual(run.full_run(cfg), 0)
             self.assertEqual([u for ip, u in logins if ip == "10.0.0.1"], ["new-user"], "remembered set is tried first")
 
+    def test_login_timeout_with_one_account_tries_the_next(self):
+        """Regression (live): a switch stalled with one account; the run gave up instead of trying others."""
+        cfg = config.validate({"collector": {"switch_username": "u", "data_dir": self.tmp.name, "seeds": ["10.0.0.1", "10.0.0.2"]},
+                               "subnets": [{"cidr": "10.0.0.0/30", "sweep": False}]})
+        stall = type("NetmikoTimeoutException", (Exception,), {})
+
+        def detect(ip, user, pw, cfg):
+            if user == "u1" or ip == "10.0.0.2":
+                raise stall("stalled")
+            return "cisco_s300"
+        sets = [("set1", "u1", "p"), ("set2", "u2", "p")]
+        with mock.patch("netmon.scan.probe", side_effect=lambda ips, *a: {ip: 1.0 for ip in ips}), \
+                mock.patch("netmon.creds.switch_sets", return_value=sets), \
+                mock.patch("netmon.devices.detect_platform", side_effect=detect), \
+                mock.patch("netmon.devices.collect", side_effect=lambda ip, *a: dict(self.records["10.0.0.1"], ip=ip, neighbors=[])):
+            self.assertEqual(run.full_run(cfg), 0)
+        store = Store(self.tmp.name)
+        self.assertEqual(store.read("state", "credentials.json"), {"10.0.0.1": "set2"})
+        failed = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.0.2")
+        self.assertEqual(failed["error"], "Login failed with every credential set: set1: SSH timed out; set2: SSH timed out")
+
     def test_neighbour_platform_hint_skips_catalyst_detection(self):
         """A switch its neighbours report as CBS/SG/C1300 goes straight to the SG/CBS driver."""
         store = Store(self.tmp.name)

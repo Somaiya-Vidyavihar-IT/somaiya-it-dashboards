@@ -95,9 +95,11 @@ class InbandLogin(unittest.TestCase):
     def test_rejected_credentials_raise_auth_error_so_next_set_is_tried(self):
         from netmiko.exceptions import NetmikoAuthenticationException
         c = self.conn(["User Name:", "Password:", "\r\nUser Name:"])
+        c.paramiko_cleanup = mock.Mock()
         with self.assertRaises(NetmikoAuthenticationException):
             c.special_login_handler()
         self.assertEqual(devices._short_error(NetmikoAuthenticationException("x")), devices.AUTH_FAILED)
+        c.paramiko_cleanup.assert_called_once()  # a refused login must not leave a session on the switch
 
 
 class Detection(unittest.TestCase):
@@ -112,24 +114,38 @@ class Detection(unittest.TestCase):
         for text, want in cases.items():
             self.assertEqual(parse.platform_hint(text), want, text)
 
-    def test_refused_catalyst_login_falls_back_to_sx_driver(self):
-        from netmiko.exceptions import NetmikoAuthenticationException
+    def probe(self, outcomes):
+        """outcomes: {device_type: Exception or 'show version' text}. Returns (result, tried)."""
         tried = []
 
         def connect(device_type, *a):
             tried.append(device_type)
-            if device_type == "cisco_ios":
-                raise NetmikoAuthenticationException("refused")
-            return mock.Mock()
+            out = outcomes[device_type]
+            if isinstance(out, Exception):
+                raise out
+            conn = mock.Mock()
+            conn.send_command_timing.side_effect = lambda cmd, **kw: out if cmd == "show version" else ""
+            conn.send_command.side_effect = lambda cmd, **kw: out
+            return conn
         with mock.patch.object(devices, "_connect", side_effect=connect):
-            self.assertEqual(devices.detect_platform("10.0.0.7", "u", "p", CFG), "cisco_s300")
-        self.assertEqual(tried, ["cisco_ios", "cisco_s300"])
+            return devices.detect_platform("10.0.0.7", "u", "p", CFG), tried
 
-    def test_wrong_password_on_both_drivers_stays_an_auth_failure(self):
+    def test_probe_uses_the_sg_cbs_driver_first_and_classifies_any_cisco(self):
+        """Regression (live): probing with the Catalyst driver first hung on SG/CBS switches."""
+        from tests import fixtures as fx
+        self.assertEqual(self.probe({"cisco_s300": "Active-image: flash://x\n  Version: 3.2.1.1"}), ("cisco_s300", ["cisco_s300"]))
+        self.assertEqual(self.probe({"cisco_s300": fx.IOS_VERSION}), ("cisco_ios", ["cisco_s300"]))
+        self.assertEqual(self.probe({"cisco_s300": "Cisco Nexus Operating System (NX-OS) Software"}), ("cisco_nxos", ["cisco_s300"]))
+
+    def test_catalyst_driver_only_when_the_probe_cannot_log_in(self):
+        from tests import fixtures as fx
+        timeout = type("NetmikoTimeoutException", (Exception,), {})("stalled")
+        self.assertEqual(self.probe({"cisco_s300": timeout, "cisco_ios": fx.IOS_VERSION}), ("cisco_ios", ["cisco_s300", "cisco_ios"]))
+
+    def test_wrong_password_is_one_failed_login_not_two(self):
         from netmiko.exceptions import NetmikoAuthenticationException
-        with mock.patch.object(devices, "_connect", side_effect=NetmikoAuthenticationException("no")):
-            with self.assertRaises(NetmikoAuthenticationException):
-                devices.detect_platform("10.0.0.7", "u", "p", CFG)
+        with self.assertRaises(NetmikoAuthenticationException):
+            self.probe({"cisco_s300": NetmikoAuthenticationException("no"), "cisco_ios": "unused"})
 
     def test_connect_uses_the_inband_driver_for_sx(self):
         with mock.patch("netmon.sx.SxSSH") as drv:

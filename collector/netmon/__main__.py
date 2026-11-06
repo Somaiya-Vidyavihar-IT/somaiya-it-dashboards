@@ -172,24 +172,29 @@ def _capture(cfg, args):
         sets = [s for s in creds.switch_sets(cfg) if not args.cred_set or s[0] == args.cred_set]
         if not sets:
             raise SystemExit(f"No stored password for credential set {args.cred_set!r}")
-        target, platform, rec = args.ip, args.platform, None
+        # Same knowledge as the full run: the driver and credential set that worked last time.
+        learned = (store.read("state", "platforms.json", default={}) or {}).get(args.ip)
+        known_set = (store.read("state", "credentials.json", default={}) or {}).get(args.ip)
+        sets = sorted(sets, key=lambda s: s[0] != known_set)
+        target, platform, rec, errors = args.ip, args.platform, None, []
         for name, user, pw in sets:
             raw.clear()
             try:
-                platform = args.platform if args.platform != "auto" else devices.detect_platform(args.ip, user, pw, cfg)
+                platform = args.platform if args.platform != "auto" else learned or devices.detect_platform(args.ip, user, pw, cfg)
             except Exception as exc:
-                if devices._short_error(exc) == devices.AUTH_FAILED:
-                    print(f"Credential set {name}: authentication failed, trying the next one")
-                    continue
-                raise SystemExit(f"Could not log in to {args.ip}: {devices._short_error(exc)}")
+                errors.append(f"set {name}: {devices._short_error(exc)}")
+                print(f"Credential set {name}: {devices._short_error(exc)}, trying the next one")
+                continue
             rec = devices.collect(args.ip, platform, user, pw, cfg, raw_sink=raw)
-            if rec["error"] == devices.AUTH_FAILED:
-                print(f"Credential set {name}: authentication failed, trying the next one")
+            if not rec["ok"]:
+                errors.append(f"set {name}: {rec['error']}")
+                print(f"Credential set {name}: {rec['error']}, trying the next one")
+                rec = None
                 continue
             print(f"Logged in with credential set {name} as {platform}")
             break
-        if rec is None or rec["error"] == devices.AUTH_FAILED:
-            raise SystemExit(f"Authentication failed on {args.ip} with every credential set")
+        if rec is None:
+            raise SystemExit(f"Could not log in to {args.ip}: " + "; ".join(errors))
     path = store.path("captures", f"capture-{target}-{stamp()}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(f"# netmon capture {target} platform={platform}\n# Contains real device output: keep it out of git.\n")

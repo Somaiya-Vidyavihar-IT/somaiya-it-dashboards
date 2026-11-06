@@ -73,7 +73,8 @@ def _discover(cfg, store, trigger, by, started):
 
     def add_hints(neighbors):
         for n in neighbors or []:
-            hint = parse.platform_hint(n.get("platform", ""))
+            # CDP gives a platform; SG/CBS per-port LLDP gives only a system description.
+            hint = parse.platform_hint(n.get("platform", "")) or parse.platform_hint(n.get("desc", ""))
             if n.get("ip") and hint:
                 hints.setdefault(n["ip"], hint)
 
@@ -98,6 +99,10 @@ def _discover(cfg, store, trigger, by, started):
         known_set = cred_of.get(ip)
         order = ([by_name[known_set]] if known_set in by_name else []) + [s for s in sets if s[0] != known_set]
         rec = None
+        failures = []  # (set name, error) per attempt
+        # A login that times out with one account may still work with another (seen live: a switch
+        # refused one account cleanly but stalled on another), so both outcomes try the next set.
+        retryable = (devices.AUTH_FAILED, "SSH timed out")
         subnet_platform = (config_mod.subnet_for(cfg, ip) or {}).get("platform", "auto")
         for name, username, password in order:
             # Learned driver > driver forced for the subnet > neighbour hint > detect.
@@ -108,7 +113,8 @@ def _discover(cfg, store, trigger, by, started):
                 except Exception as exc:
                     rec = {"ip": ip, "ok": False, "error": devices._short_error(exc), "platform": "", "neighbors": [],
                            "ports": [], "warnings": []}
-                    if rec["error"] == devices.AUTH_FAILED:
+                    failures.append((name, rec["error"]))
+                    if rec["error"] in retryable:
                         continue  # try the next credential set
                     return rec
             rec = devices.collect(ip, platform, username, password, cfg)
@@ -117,9 +123,13 @@ def _discover(cfg, store, trigger, by, started):
                 cred_of[ip] = name
                 rec["credentialSet"] = name
                 return rec
-            if rec["error"] != devices.AUTH_FAILED:
+            failures.append((name, rec["error"]))
+            if rec["error"] not in retryable:
                 return rec
-        rec["error"] = f"SSH authentication failed with all {len(order)} credential sets"
+        if all(err == devices.AUTH_FAILED for _, err in failures):
+            rec["error"] = f"SSH authentication failed with all {len(order)} credential sets"
+        else:
+            rec["error"] = "Login failed with every credential set: " + "; ".join(f"{n}: {e}" for n, e in failures)
         cred_of.pop(ip, None)
         return rec
 

@@ -69,6 +69,15 @@ class SxSSH(CiscoS300SSH):
         return FlexibleAuthClient()
 
     def special_login_handler(self, delay_factor: float = 1.0) -> None:
+        # Netmiko only cleans up after failures in session preparation, not in the login step, so a
+        # refused in-band login would otherwise leave an SSH session open on the switch.
+        try:
+            self._inband_login()
+        except Exception:
+            self.paramiko_cleanup()
+            raise
+
+    def _inband_login(self) -> None:
         sent_password = False
         output = ""
         for _ in range(8):

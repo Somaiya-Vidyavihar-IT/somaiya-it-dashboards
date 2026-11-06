@@ -132,6 +132,23 @@ class LiveSxLogin(unittest.TestCase):
         with self.assertRaises(NetmikoAuthenticationException):
             self.login("inband", "wrong")
 
+    def detect(self, mode, password="right"):
+        from netmon.config import validate
+        port = self.start(mode)
+        cfg = validate({"collector": {"switch_username": "u", "ssh_port": port, "command_timeout": 20},
+                        "subnets": [{"cidr": "10.0.0.0/24"}]})
+        return devices.detect_platform("127.0.0.1", "fixture-user", password, cfg)
+
+    def test_detection_end_to_end_both_login_styles(self):
+        """The real probe (SG/CBS driver + quiet-period reads) against the fake switch."""
+        self.assertEqual(self.detect("inband"), "cisco_s300")
+        self.assertEqual(self.detect("password"), "cisco_s300")
+
+    def test_detection_wrong_password_is_an_auth_failure(self):
+        from netmiko.exceptions import NetmikoAuthenticationException
+        with self.assertRaises(NetmikoAuthenticationException):
+            self.detect("inband", "wrong")
+
     def test_wrong_password_ssh_layer_is_an_auth_failure(self):
         from netmiko.exceptions import NetmikoAuthenticationException
         with self.assertRaises(NetmikoAuthenticationException) as ctx:
