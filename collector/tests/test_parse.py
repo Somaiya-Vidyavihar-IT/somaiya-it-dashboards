@@ -100,6 +100,16 @@ class CustomParsers(unittest.TestCase):
         self.assertEqual((cbs["hostname"], cbs["model"], cbs["version"], cbs["serial"], cbs["mac"], cbs["uptime"]),
                          ("asw-test-cbs", "CBS350-24FP-4G", "3.2.1.1", "FOCTEST0002", "40:14:82:00:00:78", "86,05:32:10"))
 
+    def test_c1300_model_is_not_catalyst(self):
+        """Regression (live, 2026-11-06): C1300 descriptions start with 'Catalyst', so every C1300
+        showed model 'Catalyst'. The per-unit Type table wins; otherwise skip the family word."""
+        desc_only = "System Description:      Catalyst 1300-48P-4X 48-Port Gigabit PoE+ Managed Switch\n"
+        self.assertEqual(parse.version_sx([], [], [], "", desc_only, "")["model"], "C1300-48P-4X")
+        with_unit = desc_only + "\nUnit          Type          \n---- ---------------------- \n 1        C1300-48P-4X  \n"
+        self.assertEqual(parse.version_sx([], [], [], "", with_unit, "")["model"], "C1300-48P-4X")
+        self.assertEqual(parse.sx_model_from_description("SG300-28 28-Port Gigabit Managed Switch"), "SG300-28")
+        self.assertEqual(parse.sx_model_from_description(""), "")
+
     def test_sx_lldp_port_detail_both_layouts(self):
         a = parse.lldp_port_detail_sx(fx.SX_LLDP_PORT_SIMPLE)
         self.assertEqual((a["ip"], a["caps"], a["name"]), ("10.0.28.21", "Bridge, Router", "asw-test-hpc-01"))

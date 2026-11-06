@@ -107,11 +107,22 @@ def version_sx(version_rows, system_rows, system_id_rows, version_text="", syste
         "hostname": grab(r"^\s*System Name:\s*(\S+)", system_text) or s.get("HOSTNAME", ""),
         "version": grab(r"SW version\s+(\d+(?:\.\d+)+)", version_text) or grab(r"Version:\s*(\d+(?:\.\d+)+)", version_text)
         or unit_value(version_text, "SW version") or v.get("SW_VERSION", ""),
-        "model": desc.split()[0] if desc else unit_value(system_text, "Type"), "serial": serial,
+        "model": unit_value(system_text, "Type") or sx_model_from_description(desc), "serial": serial,
         "uptime": grab(r"System Up Time\s*\([^)]*\)\s*:\s*(\S+)", system_text) or unit_value(system_text, "Up time")
         or s.get("UP_TIME", ""),
         "mac": norm_mac(grab(r"System MAC Address:\s*(\S+)", system_text) or s.get("MAC_ADDRESS", "")),
     }
+
+
+def sx_model_from_description(desc):
+    """Model from an SG/CBS/C1300 'System Description'. SG/CBS put the model first
+    ('CBS350-24FP-4G 24-Port…'); C1300 starts with the family name ('Catalyst 1300-48P-4X …'), which
+    showed every C1300 as model 'Catalyst' (live, 2026-11-06). Skip vendor/family words and name it
+    like its PID (C1300-48P-4X)."""
+    words = [w for w in (desc or "").split() if w.lower() not in ("cisco", "catalyst")]
+    if not words:
+        return ""
+    return "C" + words[0] if re.match(r"\d{4}-", words[0]) else words[0]
 
 
 def unit_value(text, column):
