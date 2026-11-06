@@ -22,6 +22,12 @@ class InbandSteps(unittest.TestCase):
         # Forced password change (seen live): never treated as an ordinary password prompt.
         self.assertEqual(sx.inband_step("…maximum lifetime. Please change the password…\r\nEnter old password: "), "old-password")
         self.assertEqual(sx.inband_step("\r\nDo you want to auto generate new password (Y/N)[\x1b[1mN\x1b[0m] ?"), "question")
+        # Other wordings of a change dialog are never answered with the password.
+        for text in ("Enter new password: ", "New Password:", "Confirm password: ", "Re-enter password:",
+                     "Retype new password:", "Enter password again:",
+                     "Your password has expired.\r\nPassword:", "You must change your password now.\r\nPassword: "):
+            self.assertEqual(sx.inband_step(text), "change", text)
+        self.assertEqual(sx.inband_step("User Name:admin\r\nPassword:"), "password", "an ordinary login is unaffected")
 
 
 class FakeTransport:
@@ -102,6 +108,11 @@ class InbandLogin(unittest.TestCase):
             c.special_login_handler()
         self.assertEqual(c.sent, ["\n"], "a Y/N question is never answered")
         c.paramiko_cleanup.assert_called_once()
+        c = self.conn(["User Name:", "Password:", "Password expired.\r\nEnter new password: "])
+        c.paramiko_cleanup = mock.Mock()
+        with self.assertRaises(sx.PasswordExpired):
+            c.special_login_handler()
+        self.assertEqual(c.sent, ["u\n", "secret\n"], "nothing is typed into a new-password field")
 
     def test_password_auth_switch_goes_straight_to_prompt(self):
         c = self.conn(["\r\nasw-test-02#"])

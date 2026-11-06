@@ -20,6 +20,9 @@ from netmiko.exceptions import NetmikoAuthenticationException
 USER_RE = re.compile(r"(User ?Name|Username|login as|User)\s*:\s*$", re.I)
 PASS_RE = re.compile(r"Password\s*:\s*$", re.I)
 OLD_PASS_RE = re.compile(r"old password\s*:\s*$", re.I)
+# Any other password-change field. Never typed into: the login is abandoned instead.
+CHANGE_PASS_RE = re.compile(r"(new|confirm|re-?enter|retype|verify)\b[^\n]*password\s*:\s*$|password\s+again\s*:\s*$", re.I)
+EXPIRY_TEXT_RE = re.compile(r"password (has )?expired|maximum lifetime|must change (your )?password", re.I)
 YES_NO_RE = re.compile(r"[(\[]\s*Y\s*/\s*N\s*[)\]]", re.I)
 PROMPT_RE = re.compile(r"[>#]\s*$")
 # No inline (?i): netmiko wraps the pattern in a group, so case-insensitivity goes in re_flags.
@@ -33,15 +36,18 @@ class PasswordExpired(Exception):
 
 def inband_step(text):
     """What the last line of the login output asks for:
-    'old-password', 'question', 'password', 'user', 'done' or ''."""
+    'old-password', 'change', 'question', 'password', 'user', 'done' or ''."""
     lines = [l for l in (text or "").replace("\r", "\n").split("\n") if l.strip()]
     tail = lines[-1].strip() if lines else ""
     if OLD_PASS_RE.search(tail):
         return "old-password"
+    if CHANGE_PASS_RE.search(tail):
+        return "change"
     if YES_NO_RE.search(tail):
         return "question"
     if PASS_RE.search(tail):
-        return "password"
+        # A plain "Password:" that follows password-expiry text is part of a change dialog.
+        return "change" if EXPIRY_TEXT_RE.search(text or "") else "password"
     if USER_RE.search(tail):
         return "user"
     if PROMPT_RE.search(tail):
@@ -112,8 +118,9 @@ class SxSSH(CiscoS300SSH):
                     raise PasswordExpired(f"Password expired on {self.host}: the switch insists on a change (none made)")
                 self.password_expired = True
                 self.write_channel(self.RETURN)
-            elif step == "question":
-                # e.g. "auto generate new password (Y/N)": any answer could lead to a change.
+            elif step in ("question", "change"):
+                # e.g. "auto generate new password (Y/N)" or "New password:": any answer could lead to
+                # a change, so nothing is typed and the session is closed.
                 raise PasswordExpired(f"Password expired on {self.host}: the switch asks to change it (declined, none made)")
             elif step == "user":
                 if sent_password:  # asked to log in again: the switch rejected these credentials
