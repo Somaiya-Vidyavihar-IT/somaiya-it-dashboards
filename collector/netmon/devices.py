@@ -1,6 +1,7 @@
 """Per-device SSH collection. Sends only read-only 'show' commands; never enters config mode."""
 import logging
 import re
+import time
 
 from . import parse
 
@@ -41,6 +42,29 @@ COMMANDS = {
 for _cmds in COMMANDS.values():
     for _key, _cmd, _ in _cmds:
         assert _cmd.startswith("show "), f"non read-only command in COMMANDS: {_cmd}"
+
+# Sent by the netmiko driver itself right after login (its session_preparation, netmiko 4.x).
+# They change only this SSH session's screen width and paging; nothing is saved on the switch.
+# Listed so the dashboard can show every line the collector sends.
+SESSION_SETUP = {
+    "cisco_ios": ["terminal width 511", "terminal length 0"],
+    "cisco_nxos": ["terminal width 511", "terminal length 0"],
+    "cisco_s300": ["terminal width 511", "terminal datadump"],
+}
+
+
+# The switch answered with an error instead of output (command not supported on this model/OS).
+REJECTED = re.compile(r"^.*(% ?(Invalid|Incomplete|Ambiguous|Unrecognized)|Unrecognized command|not supported).*$", re.I | re.M)
+
+
+def _log(rec, cmd, purpose, result, detail="", text=None, started=None):
+    """One line per command for the dashboard: what was sent, why, and how the output was read."""
+    entry = {"command": cmd, "purpose": purpose, "result": result, "detail": detail[:200]}
+    if text is not None:
+        entry["lines"] = len(text.splitlines())
+    if started is not None:
+        entry["seconds"] = round(time.monotonic() - started, 1)
+    rec["commands"].append(entry)
 
 
 def _connect(device_type, ip, username, password, cfg):
@@ -113,27 +137,39 @@ def collect(ip, platform, username, password, cfg, raw_sink=None):
     rec = {"ip": ip, "ok": False, "error": None, "platform": platform, "warnings": [],
            "hostname": "", "model": "", "serial": "", "version": "", "uptime": "", "mac": "",
            "cdp": [], "lldp": [], "neighbors": [], "ports": [], "errors": None,
-           "poe": None, "poePorts": [], "cpu": None}
+           "poe": None, "poePorts": [], "cpu": None, "commands": []}
     timeout = cfg["collector"]["command_timeout"]
     try:
         conn = _connect(platform, ip, username, password, cfg)
     except Exception as exc:
         rec["error"] = _short_error(exc)
         return rec
+    for cmd in SESSION_SETUP.get(platform, []):
+        _log(rec, cmd, "session", "setup")
     if getattr(conn, "password_expired", False) is True:
         rec["passwordExpired"] = True
         rec["warnings"].append("password expired for this account; the switch asked for a change, which was declined")
     results = {}
     try:
         for key, cmd, textfsm in COMMANDS[platform]:
+            started, before = time.monotonic(), len(rec["warnings"])
             try:
                 rows, text = _run(conn, cmd, textfsm, timeout, platform, rec["warnings"])
                 results[key] = (rows, text)
                 if raw_sink is not None:
                     raw_sink[cmd] = text
+                # Only the first lines: a rejection is the whole answer, while real output may mention "not supported".
+                fell_back, rejected = len(rec["warnings"]) > before, REJECTED.search("\n".join((text or "").splitlines()[:3]))
+                if rejected:
+                    _log(rec, cmd, key, "rejected", rejected.group(0).strip(), text, started)
+                elif fell_back:
+                    _log(rec, cmd, key, "fallback", rec["warnings"][-1], text, started)
+                else:
+                    _log(rec, cmd, key, "ok", "TextFSM template" if textfsm else "collector text parser", text, started)
             except Exception as exc:
                 rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
                 results[key] = ([], "")
+                _log(rec, cmd, key, "failed", _short_error(exc), None, started)
         _normalise(rec, platform, results)
         prompt = getattr(conn, "base_prompt", "")
         if not rec["hostname"] and isinstance(prompt, str) and prompt.strip():
@@ -169,14 +205,20 @@ def lldp_details_sx(conn, rec, timeout, raw_sink=None):
             continue
         cmd = f"show lldp neighbors {port}"
         assert cmd.startswith("show ")
+        started = time.monotonic()
         try:
             text = conn.send_command(cmd, read_timeout=timeout)
         except Exception as exc:
             rec["warnings"].append(f"{cmd}: {_short_error(exc)}")
+            if "commands" in rec:
+                _log(rec, cmd, "lldp-port", "failed", _short_error(exc), None, started)
             continue
         if raw_sink is not None:
             raw_sink[cmd] = text
         info = parse.lldp_port_detail_sx(text)
+        if "commands" in rec:
+            _log(rec, cmd, "lldp-port", "ok", f"management IP {info['ip']}" if info["ip"] else "no management IP in the output",
+                 text, started)
         if info["ip"]:
             n["ip"] = info["ip"]
         if info["caps"] and not n["caps"]:

@@ -155,6 +155,34 @@ class CustomParsers(unittest.TestCase):
             rec = devices.collect("10.0.0.9", "cisco_s300", "u", "p", cfg)
         self.assertEqual((rec["hostname"], rec["model"]), ("dsw-test-sg500x", "SG500X-24"), "hostname from the CLI prompt")
 
+    def test_collect_logs_every_command_and_how_it_was_read(self):
+        """The dashboard lists the commands sent to each switch so the team can see which to change."""
+        from unittest import mock
+        from netmon import config, devices
+        cfg = config.validate({"collector": {"switch_username": "u"}, "subnets": [{"cidr": "10.0.0.0/24"}]})
+        conn = mock.Mock(base_prompt="asw-test")
+
+        def answer(cmd, **kw):
+            if cmd == "show cpu utilization":
+                raise TimeoutError("read timed out")
+            if cmd == "show power inline":
+                return "                                     ^\n% Invalid input detected at '^' marker."
+            return {"show version": fx.SG500X_VERSION, "show system": fx.SG500X_SYSTEM}.get(cmd, "")
+        conn.send_command.side_effect = answer
+        with mock.patch.object(devices, "_connect", return_value=conn):
+            rec = devices.collect("10.0.0.9", "cisco_s300", "u", "p", cfg)
+        log = {c["command"]: c for c in rec["commands"]}
+        self.assertEqual([c["command"] for c in rec["commands"]][:2], devices.SESSION_SETUP["cisco_s300"])
+        self.assertEqual(log["terminal datadump"]["result"], "setup")
+        sent = [c[0][0] for c in conn.send_command.call_args_list]
+        self.assertEqual([c for c in log if c.startswith("show ")], sent, "every command sent is listed, in order")
+        self.assertEqual(log["show cpu utilization"]["result"], "failed")
+        self.assertEqual(log["show power inline"]["result"], "rejected")
+        self.assertIn("Invalid input", log["show power inline"]["detail"])
+        self.assertEqual(log["show version"]["result"], "ok")
+        self.assertGreater(log["show version"]["lines"], 3)
+        self.assertTrue(all(c["purpose"] for c in rec["commands"]))
+
     def test_cbs_poe_table(self):
         self.assertEqual(parse.poe_totals(fx.CBS_POE), (370.0, 183.0))
         ports = {p["port"]: (p["oper"], p["powerW"], p["class"]) for p in parse.poe_ports_sx(fx.CBS_POE)}
