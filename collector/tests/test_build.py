@@ -157,6 +157,11 @@ class Reports(unittest.TestCase):
                 text = fh.read()
             self.assertIn('subgraph cluster_', text)
             self.assertIn('"10.0.0.1" -- "10.0.1.1"', text)
+            # A backslash or quote in device text must not escape the DOT label.
+            snap["devices"][0]["hostname"] = 'core\\"x'
+            reports.write_dot(snap, dot)
+            with open(dot, encoding="utf-8") as fh:
+                self.assertIn('[label="core  x\\n', fh.read())
             try:
                 import openpyxl
             except ImportError:

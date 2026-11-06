@@ -61,8 +61,13 @@ def write_excel(snapshot, path):
     wb.save(path)
 
 
+def _clean(text):
+    # Device text is untrusted: no quotes, backslashes or line breaks inside a DOT string.
+    return re.sub(r'["\\\n\r]', " ", str(text or ""))
+
+
 def _q(text):
-    return '"' + re.sub(r'["\\\n\r]', " ", str(text or "")) + '"'
+    return '"' + _clean(text) + '"'
 
 
 def write_dot(snapshot, path):
@@ -76,7 +81,7 @@ def write_dot(snapshot, path):
         lines.append(f"  subgraph cluster_{i} {{ label={_q(inst)}; color=\"#b7202e\";")
         for d in devs:
             color = "#f7e9ec" if d["status"] != "ok" or d["flags"] else "#ffffff"
-            label = f"{d['hostname'] or d['ip']}\\n{d['model']}\\n{d['ip']}".replace('"', " ")
+            label = "\\n".join(_clean(v) for v in (d["hostname"] or d["ip"], d["model"], d["ip"]))
             lines.append(f"    {_q(d['ip'])} [label=\"{label}\", fillcolor=\"{color}\"];")
         lines.append("  }")
     for l in snapshot["links"]:

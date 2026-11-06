@@ -34,7 +34,7 @@ Done and Already Done count as Marked Done; Working as expected is separate. All
 
 ### Network Monitoring
 
-`site/network-monitoring/index.html` (`#network-monitoring`) shows the campus switching estate: the Nexus 9K core, the Catalyst / SG / CBS / C1300 distribution and access switches, and the Aruba APs. It covers inventory, a core → distribution → access topology, up/down, lost or down uplinks, err-disabled ports and error bursts, PoE budget, CPU, and an AP inventory that joins WLC data with switch CDP/LLDP and PoE. Excel and Graphviz DOT exports come from the API.
+`site/network-monitoring/index.html` (`#network-monitoring`) shows the campus switching estate: the Nexus 9K core, the Catalyst / SG / CBS / C1300 distribution and access switches, and the Aruba APs. It covers inventory, a core → distribution → access topology, up/down, lost or down uplinks, err-disabled ports and error bursts, PoE budget, CPU, and an AP inventory that joins WLC data with switch CDP/LLDP and PoE. Excel and Graphviz DOT exports come from the API. **Topology → Diagram (DOT)** draws the same DOT file in the browser (pan, zoom, zoom to an institute, full screen, select a switch for details) using Viz.js, a WebAssembly build of Graphviz kept in `site/vendor/viz/` and loaded only when the diagram is opened.
 
 - **Data source:** `collector/` (`netmon`), a read-only Python collector and HTTPS API on a campus Windows host. Full runs happen at 08:00 and 16:30 IST and on demand; a TCP/22 up/down check runs every 15 minutes. See [collector/README.md](collector/README.md).
 - **Access:** the page uses the shared hub Google session. The API checks the token with Google and allows only the IT Network Team list. Others see "Access denied" and no data. The API is reachable only on campus/VPN; no network data is stored on GitHub, Pages or Google.
@@ -161,6 +161,7 @@ site/
   koha-support/index.html         # KOHA UI, logic, and mapper
   uat-observations/index.html     # UAT Observations UI, logic, and mapper
   network-monitoring/index.html   # Network Monitoring UI (data from the campus collector API)
+  vendor/viz/                     # Viz.js 3.31.0 (Graphviz in WebAssembly) for the topology diagram; see its README
 collector/                        # netmon: read-only network collector + HTTPS API (campus host, not Pages)
 tests/
   check.cjs                       # Main checks, including KOHA fixtures

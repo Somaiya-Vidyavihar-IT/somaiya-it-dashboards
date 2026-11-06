@@ -15,6 +15,7 @@ Somaiya IT Dashboards is a read-only GitHub Pages hub for the support team. Goog
 - `site/shared/session.js` and `session-worker.js`: portal-owned and shared in-memory authorization, tab exchange, and recovery.
 - `site/config.js`: public Google OAuth client ID and the campus network API address (`netmonApiBase`).
 - `site/network-monitoring/index.html`: Network Monitoring UI. Its data comes from the campus collector API, not Google Sheets.
+- `site/vendor/viz/`: unmodified Viz.js (Graphviz in WebAssembly), the one approved browser dependency. Required to lay out the topology DOT file; loaded only by the Topology diagram. Update it only from the npm tarball with a checked integrity hash (see its README).
 - `collector/`: the Python network collector and HTTPS API (`netmon`) that run on a campus Windows host. It is never deployed to Pages.
 - `.github/workflows/pages.yml`: validation and deployment of `site/` only. It also runs the collector's unit tests.
 
