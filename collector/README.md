@@ -51,11 +51,11 @@ A plain-language, step-by-step guide for the network team is kept in the network
    C:\netmon\netmon capture --wlc <WLC_IP>
    ```
    Check the printed summary: hostname, model, serial, neighbours, PoE and CPU. The SG/CBS/C1300 CDP, PoE and CPU parsers and the Aruba `show ap active` / `show ap lldp neighbors` parsers are tolerant custom parsers, so confirm them first.
-10. **First run and scheduled tasks.**
+10. **First run and scheduled tasks.** The service account needs the Windows right **Log on as a batch job**, or the tasks are registered but never start (`LastTaskResult 267011`). Grant it in `secpol.msc` (started from the elevated window) → Local Policies → User Rights Assignment. On a domain-joined host, pick the computer under *Locations…* to find a local account. `install-tasks.ps1` checks the right, starts `netmon-api`, and reports whether Windows actually launched it.
     ```powershell
     C:\netmon\netmon run
     .\install-tasks.ps1 -ServiceAccount '<VM_NAME>\svc-netmon'
-    Start-ScheduledTask -TaskName netmon-api
+    curl.exe -k https://localhost:8443/api/v1/health
     ```
 11. **Hub.** Set `netmonApiBase` in `site/config.js` to `https://netmon.somaiya.edu:8443` and publish (`dev` first).
 
