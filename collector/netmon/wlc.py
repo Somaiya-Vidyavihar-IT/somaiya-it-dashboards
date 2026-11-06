@@ -1,4 +1,6 @@
 """Aruba AOS 8 controller collection (read-only show commands)."""
+import re
+
 from . import parse
 from .devices import _connect, _short_error, parse_rows
 
@@ -38,6 +40,10 @@ def collect(host, username, password, cfg, raw_sink=None):
     rec["aps"] = parse.ap_database_best(db_rows, db_text)
     rec["clients"] = parse.ap_clients(parse.fixed_table(out.get("active", ([], ""))[1]))
     rec["apLldp"] = parse.ap_lldp(parse.fixed_table(out.get("lldp", ([], ""))[1]))
+    # Self-check against the WLC's own count, so a layout change can never silently drop APs again.
+    total = re.search(r"Total APs\s*:\s*(\d+)", db_text or "")
+    if total and int(total.group(1)) != len(rec["aps"]):
+        rec["warnings"].append(f"read {len(rec['aps'])} APs but the WLC reports Total APs: {total.group(1)}")
     rec["ok"] = bool(rec["aps"])
     if not rec["ok"]:
         rec["error"] = "No APs parsed from 'show ap database long'"

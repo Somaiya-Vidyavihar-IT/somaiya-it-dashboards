@@ -252,9 +252,9 @@ IPV4 = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 def lldp_port_detail_sx(text):
     """'show lldp neighbors <port>' on SG/CBS/C1300 → {ip, caps, name, desc}.
 
-    Shortcut: written from Cisco's documented layouts, not yet a live capture. It accepts both
-    'Management address: 10.0.0.5' and a 'Management Address Information' block with
-    'Address Subtype: IPv4' / 'Address: 10.0.0.5'. Upgrade once a real capture is checked."""
+    Confirmed on a live CBS350-24XT (fw 3.5.3.2): 'Management Address: 10.0.0.5'. Also accepts the
+    documented 'Management Address Information' block ('Address Subtype: IPv4' / 'Address: x').
+    A non-IP value (seen live from a Nexus: 'Management Address: pf') yields no IP."""
     t = text or ""
     ip = ""
     m = re.search(r"Management\s+Address", t, re.I)
@@ -474,7 +474,8 @@ def fixed_table(text):
                 end = starts[k + 1] if k + 1 < len(starts) else len(line)
                 values.append(line[start:end].strip())
             rows.append(dict(zip(names, values)))
-        break
+        # No break: Aruba WLCs print long lists as repeated blocks of ~32 rows, each with its own
+        # header and column widths (seen live: 'Total APs: 348' arrived as 11 blocks).
     return rows
 
 

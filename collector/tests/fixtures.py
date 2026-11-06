@@ -308,6 +308,31 @@ Management Address Information
   Interface Number: 100000
 """
 
+# Real AOS 8 behaviour (2026-11-06 capture of a 348-AP controller): long lists arrive as repeated
+# blocks, each with its own header, column widths and Flags legend; a Down AP may have no flags.
+ARUBA_AP_DATABASE_BLOCKS = """
+AP Database
+-----------
+Name               Group       AP Type  IP Address     Status              Flags  Switch IP     Standby IP  Wired MAC Address  Serial #    Port  FQLN  Outer IP  User
+----               -----       -------  ----------     ------              -----  ---------     ----------  -----------------  --------    ----  ----  --------  ----
+ap-blk1-up         campus      515      10.60.0.11     Up 5d:20h:7m:59s           10.0.0.5      0.0.0.0     20:4c:03:00:01:01  CNTEST0101  N/A   N/A   N/A
+ap-blk1-down       campus      655      10.60.0.12     Down                       10.0.0.5      0.0.0.0     20:4c:03:00:01:02  USTEST0102        N/A   N/A
+
+Flags: 1 = 802.1x authenticated AP use EAP-PEAP;   1+ = 802.1x use EST;    1- = 802.1x use factory cert
+       2 = Using IKE version 2;                    4 = WiFi Uplink
+
+AP Database
+-----------
+Name                          Group        AP Type  IP Address     Status             Flags  Switch IP     Standby IP  Wired MAC Address  Serial #    Port  FQLN  Outer IP  User
+----                          -----        -------  ----------     ------             -----  ---------     ----------  -----------------  --------    ----  ----  --------  ----
+LAB Block Two Corridor AP     campus-west  505      10.60.1.21     Up 14d:15h:32m:37s        10.0.0.5      0.0.0.0     20:4c:03:00:02:01  USTEST0201  N/A   N/A   N/A
+ap-blk2-flagged               campus-west  303      10.60.1.22     Down               N      10.0.0.5      0.0.0.0     20:4c:03:00:02:02  CNTEST0202        N/A   N/A
+
+Flags: 1 = 802.1x authenticated AP use EAP-PEAP;   1+ = 802.1x use EST;    1- = 802.1x use factory cert
+
+Total APs:4
+"""
+
 # Real AOS 8 layout (2026-11-05 capture), invented values: "Neighbor" is an index, the switch is
 # "Chassis Name/ID", and "Not received" marks fields the switch did not send.
 ARUBA_AP_LLDP = """AP LLDP Neighbors (Updated every 60 seconds)

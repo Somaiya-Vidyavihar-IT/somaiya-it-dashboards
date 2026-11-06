@@ -212,6 +212,31 @@ class TextFsmNormalisers(unittest.TestCase):
         self.assertEqual(len(rec["neighbors"]), 3, [n["name"] for n in rec["neighbors"]])
         self.assertEqual(len({n["localPort"] for n in rec["neighbors"]}), 3, "one entry per port")
 
+    def test_ap_database_reads_every_block(self):
+        """Regression (live WLC, 348 APs): only the first ~32-row block was read, and the template put
+        'Down' into Flags when Flags was empty, leaving Status blank."""
+        text = fx.ARUBA_AP_DATABASE_BLOCKS
+        rows = parse_output(platform="aruba_os", command="show ap database long", data=text)
+        best = parse.ap_database_best(rows, text)
+        self.assertEqual([(a["name"], a["status"].split()[0], a["flags"]) for a in best],
+                         [("ap-blk1-up", "Up", ""), ("ap-blk1-down", "Down", ""),
+                          ("LAB Block Two Corridor AP", "Up", ""), ("ap-blk2-flagged", "Down", "N")])
+        self.assertEqual(best[2]["group"], "campus-west")
+
+    def test_wlc_warns_when_ap_count_differs_from_its_total(self):
+        from unittest import mock
+        from netmon import config, wlc
+        cfg = config.validate({"collector": {"switch_username": "u"}, "subnets": [{"cidr": "10.0.0.0/24"}]})
+        good = fx.ARUBA_AP_DATABASE_BLOCKS
+        short = good.replace("Total APs:4", "Total APs:5")
+        for text, warned in ((good, False), (short, True)):
+            conn = mock.Mock()
+            conn.send_command.side_effect = lambda cmd, read_timeout=None, t=text: t if "database" in cmd else ""
+            with mock.patch("netmon.wlc._connect", return_value=conn):
+                rec = wlc.collect("10.0.0.5", "u", "p", cfg)
+            self.assertEqual(len(rec["aps"]), 4)
+            self.assertEqual(any("Total APs: 5" in w for w in rec["warnings"]), warned)
+
     def test_ap_database_keeps_names_with_spaces(self):
         text = fx.ARUBA_AP_DATABASE_SPACES
         rows = parse_output(platform="aruba_os", command="show ap database long", data=text)
