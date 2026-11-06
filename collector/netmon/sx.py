@@ -5,6 +5,11 @@ Without it they accept the SSH session and then ask "User Name:" / "Password:" i
 Netmiko's cisco_s300 driver does not answer those prompts (its docs require password-auth), so on
 campus it failed as "authentication failed" or "timed out" on ~70 switches. This driver handles
 both styles without any change on the switches.
+
+When the account's password has expired (password aging), the switch forces a password change
+at login ("Enter old password:"). The collector never changes anything: it declines with an
+empty answer, which the switch accepts by letting the session continue (seen live), and the
+switch is flagged so the network team can reset the password or disable aging.
 """
 import re
 
@@ -14,15 +19,27 @@ from netmiko.exceptions import NetmikoAuthenticationException
 
 USER_RE = re.compile(r"(User ?Name|Username|login as|User)\s*:\s*$", re.I)
 PASS_RE = re.compile(r"Password\s*:\s*$", re.I)
+OLD_PASS_RE = re.compile(r"old password\s*:\s*$", re.I)
+YES_NO_RE = re.compile(r"[(\[]\s*Y\s*/\s*N\s*[)\]]", re.I)
 PROMPT_RE = re.compile(r"[>#]\s*$")
 # No inline (?i): netmiko wraps the pattern in a group, so case-insensitivity goes in re_flags.
-LOGIN_PATTERN = r"(?:User ?Name\s*:|Username\s*:|login as\s*:|User\s*:|Password\s*:|[>#])\s*$"
+# "\?" stops on questions such as "auto generate new password (Y/N)[N] ?".
+LOGIN_PATTERN = r"(?:User ?Name\s*:|Username\s*:|login as\s*:|User\s*:|Password\s*:|\?|[>#])\s*$"
+
+
+class PasswordExpired(Exception):
+    """The switch insists on a password change before allowing a session. Nothing was changed."""
 
 
 def inband_step(text):
-    """What the last line of the login output asks for: 'user', 'password', 'done' or ''."""
+    """What the last line of the login output asks for:
+    'old-password', 'question', 'password', 'user', 'done' or ''."""
     lines = [l for l in (text or "").replace("\r", "\n").split("\n") if l.strip()]
     tail = lines[-1].strip() if lines else ""
+    if OLD_PASS_RE.search(tail):
+        return "old-password"
+    if YES_NO_RE.search(tail):
+        return "question"
     if PASS_RE.search(tail):
         return "password"
     if USER_RE.search(tail):
@@ -65,6 +82,8 @@ class FlexibleAuthClient(paramiko.SSHClient):
 class SxSSH(CiscoS300SSH):
     """cisco_s300 driver that also completes the in-band "User Name:" / "Password:" login."""
 
+    password_expired = False
+
     def _get_ssh_client_instance(self):
         return FlexibleAuthClient()
 
@@ -79,14 +98,24 @@ class SxSSH(CiscoS300SSH):
 
     def _inband_login(self) -> None:
         sent_password = False
-        output = ""
-        for _ in range(8):
+        declined = 0
+        for _ in range(10):
             data = self.read_until_pattern(pattern=LOGIN_PATTERN, re_flags=re.I, read_timeout=20)
-            output += data
             step = inband_step(data)
             if step == "done":
                 return
-            if step == "user":
+            if step == "old-password":
+                # Forced password change (expired password). Decline with an empty answer: never
+                # send the password here and never enter a new one.
+                declined += 1
+                if declined > 2:
+                    raise PasswordExpired(f"Password expired on {self.host}: the switch insists on a change (none made)")
+                self.password_expired = True
+                self.write_channel(self.RETURN)
+            elif step == "question":
+                # e.g. "auto generate new password (Y/N)": any answer could lead to a change.
+                raise PasswordExpired(f"Password expired on {self.host}: the switch asks to change it (declined, none made)")
+            elif step == "user":
                 if sent_password:  # asked to log in again: the switch rejected these credentials
                     raise NetmikoAuthenticationException(f"Switch rejected the credentials (in-band login) on {self.host}")
                 self.write_channel(self.username + self.RETURN)

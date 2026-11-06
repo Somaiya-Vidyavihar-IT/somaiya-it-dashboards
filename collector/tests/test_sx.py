@@ -19,6 +19,9 @@ class InbandSteps(unittest.TestCase):
         self.assertEqual(sx.inband_step("Password:********\r\n\r\nasw-test-02#"), "done")
         self.assertEqual(sx.inband_step("asw-test-02>"), "done")
         self.assertEqual(sx.inband_step("Banner #1 mentions User Name: below\r\nWelcome"), "")
+        # Forced password change (seen live): never treated as an ordinary password prompt.
+        self.assertEqual(sx.inband_step("…maximum lifetime. Please change the password…\r\nEnter old password: "), "old-password")
+        self.assertEqual(sx.inband_step("\r\nDo you want to auto generate new password (Y/N)[\x1b[1mN\x1b[0m] ?"), "question")
 
 
 class FakeTransport:
@@ -86,6 +89,19 @@ class InbandLogin(unittest.TestCase):
         c = self.conn(["\r\nUser Name:", "u\r\nPassword:", "******\r\nasw-test-02#"])
         c.special_login_handler()
         self.assertEqual(c.sent, ["u\n", "secret\n"])
+
+    def test_expired_password_change_is_declined_and_a_question_aborts(self):
+        c = self.conn(["User Name:", "Password:", "Your password has exceeded the maximum lifetime…\r\nEnter old password: ",
+                       "\r\nIncorrect old password.\r\n\r\nasw-test-02>"])
+        c.special_login_handler()
+        self.assertEqual(c.sent, ["u\n", "secret\n", "\n"], "only an empty line answers 'Enter old password'")
+        self.assertTrue(c.password_expired)
+        c = self.conn(["Enter old password: ", "Do you want to auto generate new password (Y/N)[N] ?"])
+        c.paramiko_cleanup = mock.Mock()
+        with self.assertRaises(sx.PasswordExpired):
+            c.special_login_handler()
+        self.assertEqual(c.sent, ["\n"], "a Y/N question is never answered")
+        c.paramiko_cleanup.assert_called_once()
 
     def test_password_auth_switch_goes_straight_to_prompt(self):
         c = self.conn(["\r\nasw-test-02#"])

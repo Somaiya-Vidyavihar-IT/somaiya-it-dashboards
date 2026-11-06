@@ -120,6 +120,9 @@ def collect(ip, platform, username, password, cfg, raw_sink=None):
     except Exception as exc:
         rec["error"] = _short_error(exc)
         return rec
+    if getattr(conn, "password_expired", False) is True:
+        rec["passwordExpired"] = True
+        rec["warnings"].append("password expired for this account; the switch asked for a change, which was declined")
     results = {}
     try:
         for key, cmd, textfsm in COMMANDS[platform]:

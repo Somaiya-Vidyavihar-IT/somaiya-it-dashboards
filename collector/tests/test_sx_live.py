@@ -27,10 +27,10 @@ class FakeSwitch(paramiko.ServerInterface):
         return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def get_allowed_auths(self, username):
-        return "none" if self.mode == "inband" else "password"
+        return "none" if self.mode in ("inband", "expired") else "password"
 
     def check_auth_none(self, username):
-        return paramiko.AUTH_SUCCESSFUL if self.mode == "inband" else paramiko.AUTH_FAILED
+        return paramiko.AUTH_SUCCESSFUL if self.mode in ("inband", "expired") else paramiko.AUTH_FAILED
 
     def check_auth_password(self, username, password):
         ok = self.mode == "password" and (username, password) == ("fixture-user", "right")
@@ -59,7 +59,12 @@ def readline(chan, echo=True):
             chan.send(ch)
 
 
-def serve_one(sock, mode, host_key):
+EXPIRED = ("\r\n\r\nYour password has exceeded the maximum lifetime. Please change the password for better "
+           "protection of your network.\r\nEnter old password: ")
+
+
+def serve_one(sock, mode, host_key, state=None):
+    state = state if state is not None else {}
     client, _ = sock.accept()
     t = paramiko.Transport(client)
     t.add_server_key(host_key)
@@ -69,7 +74,7 @@ def serve_one(sock, mode, host_key):
         chan = t.accept(20)
         if chan is None or not server.event.wait(10):
             return
-        if mode == "inband":
+        if mode in ("inband", "expired"):
             while True:
                 chan.send("\r\n\r\nUser Name:")
                 user = readline(chan)
@@ -78,6 +83,16 @@ def serve_one(sock, mode, host_key):
                 if (user, pw) == ("fixture-user", "right"):
                     break
                 chan.send("\r\n\r\nLogin invalid")
+        if mode == "expired":  # forced password change, as seen live on CBS350 fw 3.5.0.26
+            chan.send(EXPIRED)
+            old = readline(chan, echo=False)
+            state["old_password_sent"] = old
+            if old:  # a real answer leads into the change dialog: the collector must never get here
+                chan.send("\r\n\r\nDo you want to auto generate new password (Y/N)[N] ?")
+                state["change_dialog"] = True
+                readline(chan)
+                return
+            chan.send("\r\n\r\nIncorrect old password.\r\n")
         chan.send("\r\n" + PROMPT)
         while True:
             line = readline(chan)
@@ -101,12 +116,12 @@ class LiveSxLogin(unittest.TestCase):
     def setUpClass(cls):
         cls.host_key = paramiko.RSAKey.generate(2048)
 
-    def start(self, mode):
+    def start(self, mode, state=None):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         sock.listen(1)
         self.addCleanup(sock.close)
-        threading.Thread(target=serve_one, args=(sock, mode, self.host_key), daemon=True).start()
+        threading.Thread(target=serve_one, args=(sock, mode, self.host_key, state), daemon=True).start()
         return sock.getsockname()[1]
 
     def login(self, mode, password):
@@ -143,6 +158,21 @@ class LiveSxLogin(unittest.TestCase):
         """The real probe (SG/CBS driver + quiet-period reads) against the fake switch."""
         self.assertEqual(self.detect("inband"), "cisco_s300")
         self.assertEqual(self.detect("password"), "cisco_s300")
+
+    def test_expired_password_is_declined_without_changing_anything(self):
+        """Regression (live CBS350): set2's password had expired; the switch forced a change, the old
+        handler sent the password as the 'old password' and the login stalled at a Y/N question."""
+        from netmon.config import validate
+        state = {}
+        port = self.start("expired", state)
+        cfg = validate({"collector": {"switch_username": "u", "ssh_port": port, "command_timeout": 20},
+                        "subnets": [{"cidr": "10.0.0.0/24"}]})
+        conn = devices._connect("cisco_s300", "127.0.0.1", "fixture-user", "right", cfg)
+        self.addCleanup(conn.disconnect)
+        self.assertTrue(conn.password_expired)
+        self.assertEqual(state.get("old_password_sent"), "", "the password is never sent to 'Enter old password'")
+        self.assertNotIn("change_dialog", state)
+        self.assertIn("CBS350-24P-4G", conn.send_command("show system"), "the session still works after declining")
 
     def test_login_trace_records_the_switch_but_never_the_password(self):
         import os

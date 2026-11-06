@@ -67,7 +67,7 @@ async function download(path,name){try{const r=await api(path);const url=URL.cre
 const reachOf=ip=>reach?.results?.[ip];
 function stateOf(d){const r=reachOf(d.ip);if(r&&!r.up)return 'unreachable';if(d.status!=='ok')return 'ssh-failed';return d.flags.length?'attention':'ok'}
 const stateBadge=s=>({ok:badge('Healthy','ok'),attention:badge('Needs attention','warn'),unreachable:badge('Unreachable','bad'),'ssh-failed':badge('SSH failed','bad')}[s]);
-const FLAG_TEXT={cpu:'High CPU',poe:'PoE budget',errors:'Port errors','err-disabled':'Err-disabled',uplink:'Uplink down','ssh-failed':'SSH failed'};
+const FLAG_TEXT={cpu:'High CPU',poe:'PoE budget',errors:'Port errors','err-disabled':'Err-disabled',uplink:'Uplink down','ssh-failed':'SSH failed','password-expired':'Password expired'};
 const apState=a=>a.status==='Not in WLC'?'missing':/^up/i.test(a.status)?(a.switchIp?'up':'noport'):'down';
 function fillSelect(id,values,label){const el=$(id),cur=el.value;el.innerHTML=`<option value="">${esc(label)}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');el.value=values.includes(cur)?cur:''}
 

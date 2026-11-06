@@ -206,6 +206,11 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
         if d["cpu"] is not None and d["cpu"] >= thr_cpu:
             d["flags"].append("cpu")
             finding("warning", "cpu", f"CPU {d['cpu']}% (1-minute average)", ip, hn)
+        if r.get("passwordExpired"):
+            d["flags"].append("password-expired")
+            finding("warning", "password-expired",
+                    f"The read-only account's password has expired here (credential set {r.get('credentialSet') or '?'}); "
+                    "the switch asked for a change, which the collector declined. Reset it or disable password aging.", ip, hn)
         if r.get("errors") is not None:
             new_counters[ip] = r["errors"]
             prev = prev_counters.get(ip)
