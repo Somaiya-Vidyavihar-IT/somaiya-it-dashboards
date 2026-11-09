@@ -22,6 +22,8 @@ Nothing here writes to devices. Every command is asserted at import time to star
 
 **Single-switch refresh.** Logs in to that one switch only (every credential set again, remembered one first) and re-runs its `show` commands. The snapshot is then rebuilt from the last full run's raw data (`data\state\last-run.json`) with that switch replaced, so links, roles, findings and APs stay consistent; no other switch or WLC is contacted, and new neighbours it reveals wait for the next full run. Only switches already in the last full run can be refreshed, one at a time (`state\refresh.lock`), and not while a full run is going. It needs one full run with this version first (that run writes `last-run.json`).
 
+**IP phones that look like switches.** Some phones advertise the LLDP "bridge" capability, so they look like switches. Neighbours named or described as one of `collector.phone_models` (default `["X1SG", "X301G", "X3SG"]`, Fanvil models seen on campus) are treated as phones: never probed on tcp/22, never logged in to, never listed as switches. Add a model to the list in `config.toml` when another one turns up.
+
 **No SSH from the collector.** A neighbour switch whose management IP is in a configured subnet but does not answer tcp/22 from the collector is listed as its own switch (state "No SSH from collector", linked under the switch that sees it, with a `no-ssh` warning finding) instead of only an info finding. The 15-minute check skips it. Reconnect on it checks tcp/22 first and logs in only if it now answers; the switches behind it are crawled by the next full run. Output goes to `data\refresh.log`; the result to `data\refresh-status.json`.
 
 ## Install on the collector host (Windows 10/11 or Windows Server)

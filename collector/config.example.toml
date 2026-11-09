@@ -26,6 +26,9 @@ core_hostname_pattern = ""                # regex; blank = every NX-OS (Nexus) s
 seeds = []                                # extra start IPs, e.g. ["<NEXUS_MGMT_IP>"]
 exclude = []                              # CIDRs never to touch, e.g. ["<CIDR>"]
 aruba_ouis = []                           # extra AP OUIs, e.g. ["aa:bb:cc"]
+# IP phones that advertise LLDP "bridge" and look like switches; neighbours with these model names are
+# treated as phones (never crawled or logged in to). Default when omitted: ["X1SG", "X301G", "X3SG"].
+# phone_models = ["X1SG", "X301G", "X3SG"]
 
 # One entry per management subnet (/16 to /24). The most specific match sets the institute.
 # platform: auto | cisco_ios | cisco_nxos | cisco_s300 (SG300/350/500/550, CBS350, C1300)

@@ -246,6 +246,36 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual((items["10.0.0.5"]["kind"], items["10.0.0.5"]["state"]), ("wlc", "ok"))
         self.assertFalse([i for i in prog["items"] if i["state"] in ("waiting", "running")], "nothing left pending")
 
+    def test_phones_are_never_probed_or_logged_in_to(self):
+        """A phone model neighbour is not crawled, and one an older run listed as a switch is dropped."""
+        store = Store(self.tmp.name)
+        store.write({"devices": [{"ip": "10.0.0.1", "hostname": "core-01", "neighbors": [
+            {"ip": "10.0.0.2", "name": "X301G", "platform": "", "kind": "switch"}]},
+            {"ip": "10.0.0.2", "hostname": "", "status": "failed", "neighbors": []}]}, "latest.json")
+        cfg = config.validate({"collector": {"switch_username": "u", "data_dir": self.tmp.name, "seeds": ["10.0.0.1"]},
+                               "subnets": [{"cidr": "10.0.0.0/24", "sweep": False}]})
+        core = dict(copy.deepcopy(self.records["10.0.0.1"]), neighbors=[
+            {"localPort": "Gi1/0/9", "name": "X3SG", "ip": "10.0.0.3", "remotePort": "LAN", "platform": "", "caps": "B",
+             "via": ["lldp"], "desc": "", "chassis": ""}])
+        probed, logins = [], []
+
+        def probe(ips, *a, **k):
+            probed.extend(ips)
+            return {ip: 1.0 for ip in ips}
+
+        def collect(ip, *a, **k):
+            logins.append(ip)
+            return copy.deepcopy(core)
+        with mock.patch("netmon.scan.probe", side_effect=probe), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.devices.detect_platform", return_value="cisco_nxos"), \
+                mock.patch("netmon.devices.collect", side_effect=collect):
+            self.assertEqual(run.full_run(cfg), 0)
+        self.assertEqual(logins, ["10.0.0.1"])
+        self.assertNotIn("10.0.0.2", probed, "phone from the last run is not probed again")
+        self.assertNotIn("10.0.0.3", probed, "phone neighbour is not crawled")
+        self.assertEqual([d["ip"] for d in store.read("latest.json")["devices"]], ["10.0.0.1"])
+
     def test_refresh_refusals(self):
         store = Store(self.tmp.name)
         self.assertEqual(self._refresh("10.0.1.2", None)[0], 1)

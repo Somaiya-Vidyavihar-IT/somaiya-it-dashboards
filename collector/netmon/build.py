@@ -18,7 +18,7 @@ def iso_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def neighbor_kind(n, extra_ouis=(), ap_names=frozenset(), ap_macs=frozenset()):
+def neighbor_kind(n, extra_ouis=(), ap_names=frozenset(), ap_macs=frozenset(), phone_re=None):
     text = " ".join((n.get("platform", ""), n.get("desc", ""))).lower()
     caps = n.get("caps", "").lower()
     oui = n.get("chassis", "")[:8]
@@ -31,11 +31,16 @@ def neighbor_kind(n, extra_ouis=(), ap_names=frozenset(), ap_macs=frozenset()):
     if known_ap or "aruba" in text or "wlan" in caps or "access point" in caps or wlan_flag \
             or oui in ARUBA_OUIS or oui in extra_ouis or (port_mac and port_mac[:8] in extra_ouis):
         return "ap"
-    if "phone" in caps or "phone" in text:
+    if "phone" in caps or "phone" in text or is_phone_model(n, phone_re):
         return "phone"
     if re.search(r"switch|bridge|router", caps) or re.search(r"(^|[\s,])[BRS]($|[\s,])", n.get("caps", "")):
         return "switch"
     return "other"
+
+
+def is_phone_model(n, phone_re):
+    """Neighbour named or described as a configured phone model (collector.phone_models)."""
+    return bool(phone_re) and bool(phone_re.search(" ".join((n.get("name", ""), n.get("platform", ""), n.get("desc", "")))))
 
 
 def _ap_model(n):
@@ -90,7 +95,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     ap_ouis = extra_ouis | {m[:8] for m in ap_macs}  # vendor prefixes of the APs this campus really has
     for r in ok:
         for n in r["neighbors"]:
-            n["kind"] = neighbor_kind(n, ap_ouis, ap_names, ap_macs)
+            n["kind"] = neighbor_kind(n, ap_ouis, ap_names, ap_macs, col.get("phone_re"))
             if n["kind"] in ("ap", "phone"):
                 continue
             peer = resolve(n)

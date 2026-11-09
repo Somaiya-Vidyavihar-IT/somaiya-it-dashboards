@@ -106,6 +106,28 @@ class BuildSnapshot(unittest.TestCase):
         self.assertEqual((s["switches"], s["collected"], s["failed"], s["noSsh"]), (5, 3, 1, 1))
         self.assertNotIn("neighbor-not-collected", [f["type"] for f in self.snap["findings"]])
 
+    def test_configured_phone_models_are_phones_not_switches(self):
+        """Seen live: Fanvil X1SG / X301G / X3SG phones advertise LLDP bridge and were taken for switches."""
+        recs = campus()
+        recs[2]["neighbors"] += [nbr("Gi1/0/6", "X301G", "10.0.1.60", "WAN", caps="B"),
+                                 nbr("Gi1/0/7", "x3sg", "10.0.1.61", "LAN"),
+                                 nbr("Gi1/0/8", "SEP-X1SG-LOBBY", "10.0.1.62", "eth0", platform="Fanvil X1SG")]
+        snap, _, _ = build.build(CFG, recs, WLC, now="2026-11-05T02:30:00Z",
+                                 ssh_closed=frozenset({"10.0.1.50", "10.0.1.60", "10.0.1.61", "10.0.1.62"}))
+        ips = {d["ip"] for d in snap["devices"]}
+        self.assertFalse(ips & {"10.0.1.60", "10.0.1.61", "10.0.1.62"}, "phones get no switch row")
+        self.assertIn("10.0.1.50", ips, "a real switch without SSH still does")
+        kinds = {n["name"]: n["kind"] for d in snap["devices"] if d["ip"] == "10.0.1.2" for n in d["neighbors"]}
+        self.assertEqual((kinds["X301G"], kinds["x3sg"], kinds["SEP-X1SG-LOBBY"]), ("phone", "phone", "phone"))
+        self.assertFalse([f for f in snap["findings"] if "X301G" in f["message"] or "x3sg" in f["message"]])
+        self.assertEqual(build.neighbor_kind({"name": "X301GX", "caps": "B"}, phone_re=CFG["collector"]["phone_re"]),
+                         "switch", "whole model names only")
+        no_phones = config.validate({"collector": {"switch_username": "u", "phone_models": []},
+                                     "subnets": [{"cidr": "10.0.0.0/24"}]})
+        self.assertIsNone(no_phones["collector"]["phone_re"])
+        with self.assertRaises(config.ConfigError):
+            config.validate({"collector": {"switch_username": "u", "phone_models": "X1SG"}, "subnets": []})
+
     def test_neighbour_switch_without_ip_or_out_of_scope_stays_a_finding(self):
         recs = campus()
         recs[2]["neighbors"].append(nbr("Gi1/0/4", "noip-sw", "", "Gi0/1"))

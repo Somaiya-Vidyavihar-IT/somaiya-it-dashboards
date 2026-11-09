@@ -107,7 +107,12 @@ def _discover(cfg, store, trigger, by, started):
     # 1. IP range scanner: TCP 22 over sweep-enabled subnets, plus seeds and last run's devices.
     targets = list(scan.sweep_targets(cfg))
     previous = store.read("latest.json", default={}) or {}
-    known = [d["ip"] for d in previous.get("devices", [])]
+    phone_re = col.get("phone_re")
+    # Phones that an earlier run took for switches (configured phone models) are not probed again.
+    phones = {n["ip"] for d in previous.get("devices", []) for n in d.get("neighbors", [])
+              if n.get("ip") and (n.get("kind") == "phone" or build.is_phone_model(n, phone_re))}
+    phones |= {d["ip"] for d in previous.get("devices", []) if build.is_phone_model({"name": d.get("hostname") or ""}, phone_re)}
+    known = [d["ip"] for d in previous.get("devices", []) if d["ip"] not in phones]
     hints = {}
     for d in previous.get("devices", []):
         _add_hints(hints, d.get("neighbors"))
@@ -157,7 +162,8 @@ def _discover(cfg, store, trigger, by, started):
                 new = []
                 for n in rec.get("neighbors", []):
                     ip = n.get("ip")
-                    if ip and ip not in scanned and config_mod.in_scope(cfg, ip) and build.neighbor_kind(n) == "switch":
+                    if ip and ip not in scanned and config_mod.in_scope(cfg, ip) \
+                            and build.neighbor_kind(n, phone_re=phone_re) == "switch":
                         scanned.add(ip)
                         new.append(ip)
                         progress.mark(ip, hostname=n.get("name", "")[:80],

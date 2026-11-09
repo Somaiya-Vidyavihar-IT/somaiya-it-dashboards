@@ -5,6 +5,9 @@ import re
 import tomllib
 
 PLATFORMS = {"auto", "cisco_ios", "cisco_nxos", "cisco_s300"}
+# IP phones that advertise LLDP "bridge" and so look like switches (seen live: Fanvil X1SG, X301G and
+# X3SG, named after their model). Matching neighbours are phones: never crawled, never logged in to.
+DEFAULT_PHONE_MODELS = ["X1SG", "X301G", "X3SG"]
 DEFAULT_CONFIG = os.environ.get("NETMON_CONFIG", r"C:\netmon\config.toml")
 
 
@@ -51,6 +54,13 @@ def validate(raw):
     col.setdefault("seeds", [])
     col.setdefault("exclude", [])
     col.setdefault("aruba_ouis", [])
+    col.setdefault("phone_models", list(DEFAULT_PHONE_MODELS))
+    models = col["phone_models"]
+    if not isinstance(models, list) or not all(isinstance(m, str) and m.strip() for m in models):
+        raise ConfigError('collector.phone_models must be a list of model names, e.g. ["X1SG", "X301G"]')
+    # Whole-word, case-insensitive match on the neighbour's name, platform or description.
+    col["phone_re"] = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(re.escape(m.strip()) for m in models) + r")(?![A-Za-z0-9])",
+                                 re.I) if models else None
     sets = list(col.get("switch_credential_sets") or [])
     if not sets and col["switch_username"]:
         sets = [{"name": "default", "username": col["switch_username"]}]
