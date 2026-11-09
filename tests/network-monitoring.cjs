@@ -41,7 +41,7 @@ function harness(apiBase,routes){
  vm.createContext(ctx);vm.runInContext(script,ctx);
  return {ctx,el:id=>elements.get(id),calls,connect:async(token='fixture-token')=>{vm.runInContext('initializeGoogle();connectGoogle(false)',ctx);await callback({access_token:token,expires_in:3600});},setGrant(v){grant=v}};
 }
-const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:1}}:p==='/api/v1/status'?{status:200,body:{run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt}}:p==='/api/v1/snapshot'?{status:200,body:snapshot}:p==='/api/v1/reachability'?{status:200,body:reach}:p==='/api/v1/run'&&m==='POST'?{status:202,body:{started:true}}:p==='/api/v1/download/topology.dot'?{status:200,body:'graph campus { "10.0.0.1" }'}:{status:404,body:{error:'Not found'}};
+const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:2}}:p==='/api/v1/status'?{status:200,body:{run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt}}:p==='/api/v1/snapshot'?{status:200,body:snapshot}:p==='/api/v1/reachability'?{status:200,body:reach}:p==='/api/v1/run'&&m==='POST'?{status:202,body:{started:true}}:p==='/api/v1/download/topology.dot'?{status:200,body:'graph campus { "10.0.0.1" }'}:{status:404,body:{error:'Not found'}};
 
 (async()=>{
  // Team member: data loads, untrusted device text is escaped, Run now is offered.
@@ -65,6 +65,10 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  vm.runInContext("openDevice('10.0.0.1')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'),'Older snapshots without a command list say so');
  vm.runInContext("openDevice('10.0.1.3')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'));
  await vm.runInContext('runNow()',h.ctx);assert.ok(h.calls.some(c=>c.url===API+'/api/v1/run'&&c.method==='POST'),'Run now posts to the API');
+ // An older campus API (before single-switch refresh): no button, and the dialog says what to update.
+ {const o=harness(API,(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:1}}:team(p,m));await o.connect();
+  vm.runInContext("openDevice('10.0.1.3')",o.ctx);assert.equal(o.el('refresh-switch').hidden,true,'No refresh button on an API without the endpoint');
+  assert.ok(o.el('refresh-note').textContent.includes('needs the updated collector'));}
  // Refresh / reconnect one switch from its details dialog.
  {const rs={run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt,refresh:{},refreshing:false};
   const at='2026-11-05T04:00:00Z',refreshed={...snapshot,refreshedAt:at,devices:snapshot.devices.map(d=>d.ip==='10.0.1.3'?{...d,hostname:'asw-03',status:'ok',error:null,flags:[],refreshedAt:at,refreshedBy:'net@somaiya.edu'}:d)};

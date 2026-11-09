@@ -92,7 +92,7 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/v1/snapshot", "outsider")[0].status, 403)
         resp, body = self.req("GET", "/api/v1/me", "good")
         self.assertEqual(resp.status, 200)
-        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 1})
+        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 2})
         self.assertEqual(resp.getheader("Access-Control-Allow-Origin"), ORIGIN)
         self.assertEqual(resp.getheader("Cache-Control"), "no-store")
 
@@ -138,6 +138,7 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual(post({"ip": "10.0.0.1; whoami"})[0].status, 400)
         self.assertEqual(post({"ip": ["10.0.0.1"]})[0].status, 400)
         self.assertEqual(post(b"x" * 2000)[0].status, 400)
+        self.assertEqual(post(b"not json")[0].status, 400)
         resp, body = post({"ip": "10.0.0.1"})
         self.assertEqual(resp.status, 409)
         self.assertIn("full discovery run with the updated collector", json.loads(body)["error"])
@@ -164,6 +165,23 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertIn("Content-Type", resp.getheader("Access-Control-Allow-Headers"))
         with open(self.store.path("audit.log"), encoding="utf-8") as fh:
             self.assertIn("refresh-request ip=10.0.0.1 by=net@somaiya.edu", fh.read())
+
+
+    def test_post_bodies_never_leak_into_the_next_request(self):
+        """Regression (live): an answer sent before reading the POST body broke the next request on
+        the same keep-alive connection, which the page reported as "API unreachable"."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=5)
+        headers = {"Authorization": "Bearer good", "Origin": ORIGIN, "Content-Type": "application/json"}
+        for path, token in (("/api/v1/nothing-here", "good"), ("/api/v1/run", "bad"), ("/api/v1/refresh", "bad")):
+            conn.request("POST", path, body=b'{"ip": "10.0.0.1"}', headers=dict(headers, Authorization="Bearer " + token))
+            resp = conn.getresponse()
+            resp.read()
+            self.assertIn(resp.status, (401, 404), path)
+            conn.request("GET", "/api/v1/me", headers=headers)
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200, f"same connection still works after POST {path}")
+            resp.read()
+        conn.close()
 
 
 if __name__ == "__main__":

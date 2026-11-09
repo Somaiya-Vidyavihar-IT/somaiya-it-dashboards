@@ -24,7 +24,7 @@ from .store import Store
 
 log = logging.getLogger("netmon.server")
 TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
-API_VERSION = 1
+API_VERSION = 2  # 2: POST /api/v1/refresh (single-switch refresh); the page offers it only from 2
 
 
 def google_tokeninfo(token):
@@ -214,9 +214,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(404, "Not found")
 
     def do_POST(self):
+        # Read the body first, whatever the route. An answer sent with the body still unread leaves it
+        # on the keep-alive connection, where it corrupts the browser's next request ("Failed to fetch";
+        # seen live when the page posted to /api/v1/refresh on an API that did not have it yet).
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 <= length <= 1024:
+            self.close_connection = True
+            return self._error(400, "Request body too large.")
+        body = self.rfile.read(length) if length else b""
         path = urllib.parse.urlsplit(self.path).path.rstrip("/")
         if path == "/api/v1/refresh":
-            return self._refresh()
+            return self._refresh(body)
         if path != "/api/v1/run":
             return self._error(404, "Not found")
         email = self._auth()
@@ -228,17 +239,8 @@ class Handler(BaseHTTPRequestHandler):
         self.server.store.audit(f"run-request by={email} from={self.client_address[0]}")
         self._send(202, {"started": True})
 
-
-    def _refresh(self):
+    def _refresh(self, body):
         """Re-read one switch from the last full run (dashboard: Refresh switch / Reconnect)."""
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            length = -1
-        if not 0 < length <= 1024:
-            self.close_connection = True  # unread body
-            return self._error(400, 'Send {"ip": "<switch management IP>"}.')
-        body = self.rfile.read(length)
         email = self._auth()
         if not email:
             return
