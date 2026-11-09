@@ -3,6 +3,7 @@
 # Passwords are NOT stored here. On the collector host run, as the service account:
 #   netmon set-password switch --set set1     (once per switch credential set)
 #   netmon set-password wlc
+#   netmon set-password solarwinds              (only with [cctv] below)
 
 [collector]
 data_dir = 'C:\netmon\data'
@@ -52,3 +53,25 @@ allowed_origins = ["https://somaiya-vidyavihar-it.github.io"]
 allowed_domains = ["somaiya.edu"]
 network_team = ["<NETWORK_TEAM_EMAIL>@somaiya.edu"]
 python = ""                               # interpreter for Run now; blank = the one running the API
+
+# CCTV dashboard (site/cctv-monitoring): cameras and NVRs read from SolarWinds with a READ-ONLY account
+# (SWQL SELECT over HTTPS 17774). Leave solarwinds_host blank to turn it off. The API reads SolarWinds every
+# poll_minutes in the background; Read SolarWinds now does it on demand. Its viewer list is separate from
+# network_team: being on one list gives no access to the other dashboard.
+[cctv]
+solarwinds_host = ""                      # e.g. "<SOLARWINDS_MAIN_POLLER>"; blank = CCTV dashboard off
+solarwinds_port = 17774
+solarwinds_username = "<SOLARWINDS_READONLY_USER>"
+solarwinds_cert_sha256 = ""               # blank = trust the certificate seen first, then insist on it
+viewers = ["<CCTV_VIEWER_EMAIL>@somaiya.edu"]
+poll_minutes = 5
+escalate_hours = 48                       # "Down > 2 days" list
+# How cameras and NVRs are found (an explicit other Device_Type, e.g. SWITCH, is never a camera):
+type_property = "Device_Type"             # node custom property; matched case-insensitively
+camera_types = ["CCTV", "Dahua CCTV", "Camera"]
+nvr_types = ["NVR", "Dahua NVR"]
+institute_property = "InstituteName"      # else the institute of the matching [[subnets]] entry
+# nvr_name_pattern = '(?<![A-Za-z])NVR(?![A-Za-z])'   # untagged nodes named like this are NVRs
+camera_ranges = []                        # untagged nodes in these CIDRs are cameras, e.g. ["<CAMERA_CIDR>"]
+ipam_ranges = []                          # CCTV subnets in SolarWinds IPAM: live IPs here that SolarWinds
+                                          # does not poll are listed as "Not in SolarWinds"

@@ -1,8 +1,9 @@
 """Campus-only HTTPS API for the hub's Network Monitoring page.
 
 Access: the page sends the hub's Google access token. We confirm it with Google tokeninfo (issued to
-the hub's client ID, verified email, allowed domain) and require the email on the IT Network Team
-allowlist. Tokens are never logged or stored; only a hash is cached for at most five minutes.
+the hub's client ID, verified email, allowed domain) and require the email on the dashboard's own
+allowlist: the IT Network Team list for /api/v1/*, the CCTV viewer list ([cctv] viewers) for
+/api/v1/cctv/*. Tokens are never logged or stored; only a hash is cached for at most five minutes.
 """
 import gzip
 import hashlib
@@ -24,7 +25,9 @@ from .store import Store
 
 log = logging.getLogger("netmon.server")
 TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
-API_VERSION = 2  # 2: POST /api/v1/refresh (single-switch refresh); the page offers it only from 2
+API_VERSION = 3  # 2: POST /api/v1/refresh (single-switch refresh); 3: /api/v1/cctv/* (CCTV dashboard)
+NETWORK_REFUSAL = "This account is not on the IT Network Team list for the network dashboard."
+CCTV_REFUSAL = "This account is not on the CCTV dashboard list. Ask the IT Network Team to add it."
 
 
 def google_tokeninfo(token):
@@ -49,8 +52,8 @@ class Verifier:
         self.fetch, self.clock = fetch, clock
         self.cache, self.lock = {}, threading.Lock()
 
-    def check(self, token):
-        """Return (http status, email, message)."""
+    def check(self, token, team=None, refusal=NETWORK_REFUSAL):
+        """Return (http status, email, message). team: the allowlist to apply (default: the network team)."""
         if not token or len(token) > 4096:
             return 401, None, "Connect with Google to view the network dashboard."
         key = hashlib.sha256(token.encode()).hexdigest()
@@ -84,8 +87,8 @@ class Verifier:
                 self.cache[key] = (email, now + min(self.CACHE_SECONDS, ttl))
         if email.rsplit("@", 1)[-1] not in self.domains:
             return 403, email, "This account's domain is not allowed."
-        if email not in self.team:
-            return 403, email, "This account is not on the IT Network Team list for the network dashboard."
+        if email not in (self.team if team is None else set(team)):
+            return 403, email, refusal
         return 200, email, ""
 
 
@@ -150,10 +153,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # request line only; never headers (they carry the token)
         log.info("%s %s", self.client_address[0], fmt % args)
 
-    def _auth(self):
+    def _auth(self, team=None, refusal=NETWORK_REFUSAL):
         header = self.headers.get("Authorization", "")
         token = header[7:].strip() if header.startswith("Bearer ") else ""
-        status, email, message = self.server.verifier.check(token)
+        status, email, message = self.server.verifier.check(token, team, refusal)
         if status != 200:
             if email:
                 log.info("denied %s (%s)", email, status)
@@ -190,6 +193,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if not path.startswith("/api/v1/"):
             return self._error(404, "Not found")
+        if path.startswith("/api/v1/cctv/"):
+            return self._cctv_get(path)
         email = self._auth()
         if not email:
             return
@@ -228,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "Request body too large.")
         body = self.rfile.read(length) if length else b""
         path = urllib.parse.urlsplit(self.path).path.rstrip("/")
+        if path == "/api/v1/cctv/refresh":
+            return self._cctv_refresh()
         if path == "/api/v1/refresh":
             return self._refresh(body)
         if path != "/api/v1/run":
@@ -275,10 +282,42 @@ class Handler(BaseHTTPRequestHandler):
         self._send(202, {"started": True, "ip": ip})
 
 
+    # ---- CCTV dashboard: own allowlist, data read from SolarWinds by the in-process poller ----
+    def _cctv_auth(self):
+        if self.server.cctv is None:
+            self._error(404, "CCTV monitoring is not set up on the campus server ([cctv] in config.toml).")
+            return None
+        return self._auth(self.server.cfg["cctv"]["viewers"], CCTV_REFUSAL)
+
+    def _cctv_get(self, path):
+        email = self._cctv_auth()
+        if not email:
+            return
+        store = self.server.store
+        if path == "/api/v1/cctv/me":
+            return self._send(200, {"email": email, "canRefresh": True, "apiVersion": API_VERSION})
+        if path == "/api/v1/cctv/status":
+            return self._send(200, {"poll": store.read("cctv-status.json", default={}) or {},
+                                    "polling": self.server.cctv.running(),
+                                    "pollMinutes": self.server.cfg["cctv"]["poll_minutes"]})
+        if path == "/api/v1/cctv/snapshot":
+            return self._file("cctv.json", "application/json")
+        return self._error(404, "Not found")
+
+    def _cctv_refresh(self):
+        email = self._cctv_auth()
+        if not email:
+            return
+        if not self.server.cctv.request(email):
+            return self._error(409, "SolarWinds is being read right now. The page updates when it finishes.")
+        self.server.store.audit(f"cctv-refresh-request by={email} from={self.client_address[0]}")
+        self._send(202, {"started": True})
+
+
 class NetmonServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None, start_refresh=None):
+    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None, start_refresh=None, cctv=None):
         srv = cfg["server"]
         super().__init__((srv["host"], srv["port"]), Handler)
         self.ssl_ctx = ssl_ctx
@@ -289,6 +328,10 @@ class NetmonServer(ThreadingHTTPServer):
         self.start_run = start_run or self._spawn_run
         self.start_refresh = start_refresh or self._spawn_refresh
         self._known = (None, frozenset())
+        if cctv is None and cfg.get("cctv", {}).get("enabled"):
+            from .cctv import Poller
+            cctv = Poller(cfg, self.store)
+        self.cctv = cctv  # None: CCTV routes answer 404 "not set up"
 
     def known_switches(self):
         """Switch IPs in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
@@ -348,5 +391,10 @@ def serve(cfg, dev_http=False):
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(srv["cert_file"], srv["key_file"])
     httpd = NetmonServer(cfg, ssl_ctx=ctx)
+    if httpd.cctv is not None:
+        if not cfg["cctv"]["viewers"]:
+            log.warning("[cctv] viewers is empty: nobody can open the CCTV dashboard")
+        httpd.cctv.start()
+        log.info("CCTV: reading SolarWinds %s every %s min", cfg["cctv"]["solarwinds_host"], cfg["cctv"]["poll_minutes"])
     log.info("netmon API listening on %s://%s:%s", "http" if dev_http else "https", srv["host"], srv["port"])
     httpd.serve_forever()

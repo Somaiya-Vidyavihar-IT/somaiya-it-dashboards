@@ -128,7 +128,64 @@ def validate(raw):
     srv.setdefault("python", "")
     srv["network_team"] = sorted({e.strip().lower() for e in srv["network_team"] if e.strip()})
     srv["allowed_domains"] = [d.strip().lower() for d in srv["allowed_domains"] if d.strip()]
-    return {"collector": col, "subnets": subnets, "wlc": wlc, "server": srv}
+    return {"collector": col, "subnets": subnets, "wlc": wlc, "server": srv, "cctv": validate_cctv(raw.get("cctv", {}))}
+
+
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+DEFAULT_NVR_NAME_PATTERN = r"(?<![A-Za-z])NVR(?![A-Za-z])"  # SAV-PHY-NVR-1, D.ed_NVR, KJSAC-NVR
+
+
+def validate_cctv(raw):
+    """[cctv]: cameras and NVRs read from SolarWinds. Disabled (enabled = False) while solarwinds_host is blank."""
+    cc = dict(raw or {})
+    cc.setdefault("solarwinds_host", "")
+    cc.setdefault("solarwinds_port", 17774)
+    cc.setdefault("solarwinds_username", "")
+    cc.setdefault("solarwinds_cert_sha256", "")   # blank = trust the certificate seen first, then insist on it
+    cc.setdefault("viewers", [])
+    cc.setdefault("poll_minutes", 5)
+    cc.setdefault("escalate_hours", 48)
+    cc.setdefault("type_property", "Device_Type")
+    cc.setdefault("institute_property", "InstituteName")
+    cc.setdefault("camera_types", ["CCTV", "Dahua CCTV", "Camera"])
+    cc.setdefault("nvr_types", ["NVR", "Dahua NVR"])
+    cc.setdefault("nvr_name_pattern", DEFAULT_NVR_NAME_PATTERN)
+    cc.setdefault("camera_ranges", [])
+    cc.setdefault("ipam_ranges", [])
+    cc["solarwinds_host"] = str(cc["solarwinds_host"]).strip()
+    cc["enabled"] = bool(cc["solarwinds_host"])
+    if cc["enabled"] and "<" in cc["solarwinds_host"]:
+        raise ConfigError("cctv.solarwinds_host still has a <...> placeholder")
+    for key, low, high in (("solarwinds_port", 1, 65535), ("poll_minutes", 1, 1440), ("escalate_hours", 1, 24 * 90)):
+        if not isinstance(cc[key], int) or not low <= cc[key] <= high:
+            raise ConfigError(f"cctv.{key} must be a whole number from {low} to {high}")
+    for key in ("type_property", "institute_property"):
+        cc[key] = str(cc[key]).strip()
+        if cc[key] and not IDENTIFIER.fullmatch(cc[key]):
+            raise ConfigError(f"cctv.{key} must be a SolarWinds custom property name (letters, digits, _)")
+    for key in ("camera_types", "nvr_types", "viewers"):
+        if not isinstance(cc[key], list) or not all(isinstance(v, str) for v in cc[key]):
+            raise ConfigError(f'cctv.{key} must be a list of text values, e.g. ["a", "b"]')
+    cc["camera_types"] = sorted({v.strip().lower() for v in cc["camera_types"] if v.strip()})
+    cc["nvr_types"] = sorted({v.strip().lower() for v in cc["nvr_types"] if v.strip()})
+    cc["viewers"] = sorted({v.strip().lower() for v in cc["viewers"] if v.strip()})
+    try:
+        cc["nvr_name_re"] = re.compile(cc["nvr_name_pattern"], re.I) if cc["nvr_name_pattern"] else None
+    except re.error as exc:
+        raise ConfigError(f"cctv.nvr_name_pattern is not a valid regex: {exc}")
+    for key in ("camera_ranges", "ipam_ranges"):
+        try:
+            nets = [ipaddress.ip_network(x, strict=False) for x in cc[key]]
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"cctv.{key} has an invalid subnet: {exc}")
+        if any(n.version != 4 for n in nets):
+            raise ConfigError(f"cctv.{key}: only IPv4 subnets are supported")
+        cc[key + "_nets"] = nets
+    pin = str(cc["solarwinds_cert_sha256"]).replace(":", "").strip().lower()
+    if pin and not re.fullmatch(r"[0-9a-f]{64}", pin):
+        raise ConfigError("cctv.solarwinds_cert_sha256 must be the 64 hex characters of the SHA-256 fingerprint")
+    cc["solarwinds_cert_sha256"] = pin
+    return cc
 
 
 def _check_ips(values, where):

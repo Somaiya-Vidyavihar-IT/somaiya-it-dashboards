@@ -1,6 +1,6 @@
 # Somaiya IT Dashboards
 
-A read-only support dashboard hub for Somaiya Vidyavihar IT, hosted on GitHub Pages. Issue updates and AI reviews are maintained in Google Sheets and read directly after Google authorization. Network Monitoring reads the campus network collector API instead (see below).
+A read-only support dashboard hub for Somaiya Vidyavihar IT, hosted on GitHub Pages. Issue updates and AI reviews are maintained in Google Sheets and read directly after Google authorization. Network Monitoring and CCTV Monitoring read the campus collector API instead (see below).
 
 - [Live dashboard hub](https://somaiya-vidyavihar-it.github.io/somaiya-it-dashboards/)
 - [Repository](https://github.com/Somaiya-Vidyavihar-IT/somaiya-it-dashboards)
@@ -40,6 +40,15 @@ Done and Already Done count as Marked Done; Working as expected is separate. All
 - **Access:** the page uses the shared hub Google session. The API checks the token with Google and allows only the IT Network Team list. Others see "Access denied" and no data. The API is reachable only on campus/VPN; no network data is stored on GitHub, Pages or Google.
 - **Configuration:** `netmonApiBase` in `site/config.js` (blank shows "Not configured").
 - **Run discovery now:** available to the IT Network Team; one run at a time, and each request is audited on the collector host.
+
+### CCTV Monitoring
+
+`site/cctv-monitoring/index.html` (`#cctv-monitoring`) shows the campus cameras and NVRs: cameras and NVRs up or down, an NVR inventory, cameras by institute with filters, everything down for more than two days (longest first), and live addresses in the SolarWinds IPAM CCTV subnets that SolarWinds does not poll. NVR and camera lists download as CSV (current filters, formula-safe).
+
+- **Data source:** SolarWinds, which already polls the cameras and NVRs. The campus collector (`collector/netmon/cctv.py`) reads it with a read-only account (SWQL `SELECT` only) every few minutes; see [collector/README.md](collector/README.md#cctv-dashboard-solarwinds). How cameras are recognised (SolarWinds `Device_Type` tag, NVR name, confirmed camera IP ranges) is set on the collector and shown on the page's Connection tab.
+- **Access:** its own list (`cctv.viewers` on the collector), separate from the IT Network Team list: being on one gives no access to the other dashboard. Same shared hub Google session, same campus-only API address (`netmonApiBase`).
+- **Read SolarWinds now:** available to everyone on the CCTV list; one read at a time, audited on the collector host.
+- **Not yet:** email notifications and escalation emails, and checking that video was actually recorded (needs the NVRs' own APIs).
 
 ### AI Review in the dashboards
 
@@ -161,8 +170,9 @@ site/
   koha-support/index.html         # KOHA UI, logic, and mapper
   uat-observations/index.html     # UAT Observations UI, logic, and mapper
   network-monitoring/index.html   # Network Monitoring UI (data from the campus collector API)
+  cctv-monitoring/index.html      # CCTV Monitoring UI (SolarWinds data via the campus collector API)
   vendor/viz/                     # Viz.js 3.31.0 (Graphviz in WebAssembly) for the topology diagram; see its README
-collector/                        # netmon: read-only network collector + HTTPS API (campus host, not Pages)
+collector/                        # netmon: read-only network + CCTV collector and HTTPS API (campus host, not Pages)
 tests/
   check.cjs                       # Main checks, including KOHA fixtures
   browser-flow.cjs                 # Production fixture flow
@@ -170,12 +180,13 @@ tests/
   ai-review.cjs                   # Review mapping, escaping, filters, exports
   uat.cjs                         # UAT mapping, merged dates, filters, exports, lifecycle
   network-monitoring.cjs          # Network page access, escaping, filters, Run now, switch refresh, expiry
+  cctv-monitoring.cjs             # CCTV page routes, escaping, escalations, CSV, Read now, denial, expiry
   table-sort.cjs                  # Queue sorting, hub accessibility, release token
   koha-screenshots.cjs            # KOHA screenshot links, previews, export
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-09-5`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-10-1`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 
@@ -226,6 +237,7 @@ Use the existing Somaiya assets, Arial, Power Red `#B7202E`, Vitality Red `#ED1C
 - Unattended daily delivery requires a scheduled service and approved authorization design; it is not implemented on Pages.
 - Persistent login after every hub/dashboard context closes is not implemented. Google authorization still expires.
 - Daily snapshots, reopen/deletion history, and AI review version history are not stored.
+- CCTV Monitoring sends no emails yet and cannot tell whether video was recorded; it shows only what SolarWinds polls.
 - Wider acceptance checks should cover another support account, an account without sheet access, actual long-running expiry, global disconnect/reconnect, mobile devices, and downloaded CSV/PDF output.
 
 ## References

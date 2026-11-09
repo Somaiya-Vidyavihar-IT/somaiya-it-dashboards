@@ -49,3 +49,4 @@ require('./table-sort.cjs');
 require('./koha-screenshots.cjs');
 
 require('./network-monitoring.cjs');
+require('./cctv-monitoring.cjs');

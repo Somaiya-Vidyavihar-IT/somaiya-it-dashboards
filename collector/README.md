@@ -1,6 +1,6 @@
 # netmon: campus network collector and API
 
-Backend for the hub's **Network Monitoring** dashboard (`site/network-monitoring/`). It runs on a campus Windows host, never on GitHub Pages.
+Backend for the hub's **Network Monitoring** dashboard (`site/network-monitoring/`) and **CCTV Monitoring** dashboard (`site/cctv-monitoring/`, see [CCTV dashboard](#cctv-dashboard-solarwinds)). It runs on a campus Windows host, never on GitHub Pages.
 
 - **Collector:** logs in over SSH with a read-only account and sends only `show` commands to the Nexus 9K core, the Catalyst / SG / CBS / C1300 distribution and access switches, and the Aruba WLCs. The workflow follows the network team's LLD: sweep the configured subnets for TCP/22, log in, `show version`, CDP + LLDP neighbours, crawl new neighbours inside the configured subnets, then write reports.
 - **Outputs** (in `data_dir`): `latest.json` (the dashboard snapshot), timestamped snapshots, `inventory-latest.xlsx` (Devices, Connectivity Matrix, Access Points, Problem Ports, Findings, Neighbours) and `topology-latest.dot` (Graphviz).
@@ -16,6 +16,7 @@ Nothing here writes to devices. Every command is asserted at import time to star
 | `netmon-reach` | every 15 minutes | `python -m netmon reach` (TCP/22 to known switches and WLCs, no login) |
 | `netmon-api` | at startup, auto-restart | `python -m netmon serve` |
 | Run now (dashboard) | on demand, IT Network Team | same as the full run; one run at a time |
+| CCTV: SolarWinds read | every `cctv.poll_minutes` (5) inside `netmon-api`, and on demand | `python -m netmon cctv` runs one read by hand |
 
 **Progress per switch.** Every full run (scheduled or Run now) writes `data\run-progress.json`: one item per switch and WLC with its state (waiting, running, ok, failed, no-ssh), time taken, how it was found (core seed, last run, neighbour of X port) and any error. The API serves it at `/api/v1/progress`, and the page shows it as a live list under the run status, polled every 5 seconds while a run is going.
 | Refresh switch / Reconnect (dashboard, switch details) | on demand, IT Network Team | `python -m netmon refresh --ip <IP>` |
@@ -72,20 +73,33 @@ A plain-language, step-by-step guide for the network team is kept in the network
 
 Switches can use several read-only accounts. `switch_credential_sets` lists them in the order to try. For each switch the collector tries the set that worked last time first, then the others, and remembers the winner in `data\state\credentials.json` (set names only). A switch where every set fails is shown as "SSH authentication failed with all N credential sets". A new switch costs at most N−1 failed logins, once.
 
+## CCTV dashboard (SolarWinds)
+
+The CCTV page shows cameras and NVRs up or down, the NVR inventory, and everything down longer than `cctv.escalate_hours` (48). SolarWinds already polls these devices; `netmon/cctv.py` only reads its results through the SolarWinds Information Service (`https://<host>:17774/SolarWinds/InformationService/v3/Json/Query`) with a **read-only** SolarWinds account. Every statement is checked to be a SWQL `SELECT` before it is sent.
+
+- **Where it runs:** inside `netmon-api` as a background thread (no extra scheduled task). It reads every `poll_minutes`, and **Read SolarWinds now** on the page wakes it early (one read at a time; requests are written to `audit.log`). `C:\netmon\netmon cctv` does one read by hand and prints a summary.
+- **Which nodes are cameras/NVRs** (SolarWinds has no built-in camera type): the node custom property `type_property` (`Device_Type`) in `nvr_types` / `camera_types`; else, untagged, a name matching `nvr_name_pattern` is an NVR; else, untagged, an IP in `camera_ranges` is a camera. A node tagged as anything else (e.g. `SWITCH`) is never a camera. Institute: the `institute_property` (`InstituteName`) or the matching `[[subnets]]` institute.
+- **Down since:** the last SolarWinds node-down event (`Orion.Events`, EventType 1, UTC). SolarWinds keeps about 30 days of events; older outages show as "before <oldest event>" and count as escalated. If events cannot be read, the first read that saw it down is used ("at least since"). Kept in `data\state\cctv-state.json`.
+- **Not in SolarWinds:** with `ipam_ranges` set, live IPs that SolarWinds IPAM sees in those CCTV subnets but that are not SolarWinds nodes (checked at most hourly).
+- **Certificate:** SWIS usually has a self-signed certificate. Its SHA-256 fingerprint is pinned: `solarwinds_cert_sha256`, or else the one seen first (`data\state\solarwinds-cert.json`; delete it after SolarWinds renews its certificate).
+- **Outputs:** `data\cctv.json` (the page snapshot) and `data\cctv-status.json`.
+- **Setup:** fill `[cctv]` in `config.toml` (see `config.example.toml`), then as the service account `C:\netmon\netmon set-password solarwinds`, `C:\netmon\netmon cctv` (test read), and restart `netmon-api`. The collector host needs TCP 17774 to the SolarWinds main polling engine.
+- **No alerts or emails yet** (planned for phase 2), and no check that video was recorded: SolarWinds only knows ping/SNMP.
+
 ## Access control
 
 The page sends the hub's shared Google access token as `Authorization: Bearer`. The API:
 
 1. checks it with Google `tokeninfo` (sent in the POST body). It must be issued to the hub's OAuth client ID, have a verified email, an allowed domain, and time left;
-2. requires the email to be in `server.network_team`;
+2. requires the email to be in `server.network_team` for the network routes (`/api/v1/*`), or in `cctv.viewers` for the CCTV routes (`/api/v1/cctv/me`, `status`, `snapshot`, `POST refresh`). The two lists are separate: one gives no access to the other dashboard;
 3. caches a successful check for at most 5 minutes, keyed by a SHA-256 hash of the token. Tokens are never logged or written to disk;
 4. answers CORS only for `server.allowed_origins` (the hub origin), including the Private Network Access preflight.
 
-The token also carries the hub's read-only Sheets scope, because the hub shares one session. The API only forwards it to Google `tokeninfo`. `audit.log` records every Run now and switch refresh request with the requester's email.
+The token also carries the hub's read-only Sheets scope, because the hub shares one session. The API only forwards it to Google `tokeninfo`. `audit.log` records every Run now, switch refresh and CCTV read request with the requester's email.
 
 ## Data handling
 
-`data_dir` holds switch names, IPs, serials and topology: treat it as internal. Snapshots, reports and captures are pruned after `keep_days`. Lost links stay flagged until they age out. Back up `config.toml`; `data_dir` can be rebuilt by running the collector.
+`data_dir` holds switch names, IPs, serials and topology, and camera/NVR names and IPs: treat it as internal. Snapshots, reports and captures are pruned after `keep_days`. Lost links stay flagged until they age out. Back up `config.toml`; `data_dir` can be rebuilt by running the collector.
 
 ## Development
 
