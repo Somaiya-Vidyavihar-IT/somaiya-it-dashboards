@@ -42,7 +42,12 @@ function harness(apiBase,routes){
  vm.createContext(ctx);vm.runInContext(script,ctx);
  return {ctx,el:id=>elements.get(id),calls,connect:async(token='fixture-token')=>{vm.runInContext('initializeGoogle();connectGoogle(false)',ctx);await callback({access_token:token,expires_in:3600});},setGrant(v){grant=v}};
 }
-const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:2}}:p==='/api/v1/status'?{status:200,body:{run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt}}:p==='/api/v1/snapshot'?{status:200,body:snapshot}:p==='/api/v1/reachability'?{status:200,body:reach}:p==='/api/v1/run'&&m==='POST'?{status:202,body:{started:true}}:p==='/api/v1/download/topology.dot'?{status:200,body:'graph campus { "10.0.0.1" }'}:{status:404,body:{error:'Not found'}};
+const progressDone={startedAt:'2026-11-05T02:20:00Z',finishedAt:'2026-11-05T02:30:00Z',phase:'done',items:[
+ {ip:'10.0.0.1',kind:'switch',hostname:'core-01',state:'ok',error:null,seconds:4.2,source:'core seed',at:'2026-11-05T02:21:00Z'},
+ {ip:'10.0.1.3',kind:'switch',hostname:'',state:'failed',error:'SSH authentication failed <b>x</b>',seconds:9,source:'neighbour of dsw-01 Gi1/0/3',at:'2026-11-05T02:22:00Z'},
+ {ip:'10.0.9.1',kind:'switch',hostname:'HOSTEL_DIST_SW',state:'no-ssh',error:'No answer on SSH (tcp/22)',seconds:null,source:'neighbour of core-01 Eth1/11',at:'2026-11-05T02:21:30Z'},
+ {ip:'10.0.0.5',kind:'wlc',hostname:'412 APs',state:'ok',error:null,seconds:null,source:'WLC list in config',at:'2026-11-05T02:29:00Z'}]};
+const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:2}}:p==='/api/v1/status'?{status:200,body:{run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt}}:p==='/api/v1/snapshot'?{status:200,body:snapshot}:p==='/api/v1/reachability'?{status:200,body:reach}:p==='/api/v1/progress'?{status:200,body:progressDone}:p==='/api/v1/run'&&m==='POST'?{status:202,body:{started:true}}:p==='/api/v1/download/topology.dot'?{status:200,body:'graph campus { "10.0.0.1" }'}:{status:404,body:{error:'Not found'}};
 
 (async()=>{
  // Team member: data loads, untrusted device text is escaped, Run now is offered.
@@ -70,6 +75,20 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  {const o=harness(API,(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:1}}:team(p,m));await o.connect();
   vm.runInContext("openDevice('10.0.1.3')",o.ctx);assert.equal(o.el('refresh-switch').hidden,true,'No refresh button on an API without the endpoint');
   assert.ok(o.el('refresh-note').textContent.includes('needs the updated collector'));}
+ // Per-switch progress of the last full run, and live while one runs.
+ {const g=harness(API,team);await g.connect();
+  assert.equal(g.el('progress-panel').hidden,false,'Progress list shown after a run');
+  assert.ok(g.el('progress-summary').textContent.startsWith('Last full run, switch by switch')&&g.el('progress-summary').textContent.includes('2 read · 1 SSH failed · 1 no SSH'));
+  const rows=g.el('progress-rows').innerHTML;assert.ok(rows.includes('HOSTEL_DIST_SW')&&rows.includes('WLC · 412 APs')&&rows.includes('neighbour of core-01 Eth1/11'));
+  assert.ok(rows.includes('&lt;b&gt;x&lt;/b&gt;')&&!rows.includes('<b>x'),'Errors are escaped');assert.ok(rows.indexOf('10.0.1.3')<rows.indexOf('core-01'),'Failures listed before successes');
+  vm.runInContext("document.getElementById('progress-filter').value='no-ssh';renderProgress()",g.ctx);assert.ok(g.el('progress-rows').innerHTML.includes('HOSTEL_DIST_SW')&&!g.el('progress-rows').innerHTML.includes('core seed'),'Filter keeps only no-SSH rows');
+  const startedAt='2026-11-05T03:00:00Z',liveProg={startedAt,finishedAt:null,phase:'ssh',items:[{ip:'10.0.0.1',kind:'switch',hostname:'core-01',state:'ok',seconds:3,source:'core seed',at:'2026-11-05T03:00:05Z'},{ip:'10.0.1.1',kind:'switch',hostname:'dsw-01',state:'running',source:'neighbour of core-01 Eth1/10',at:'2026-11-05T03:00:06Z'},{ip:'10.0.1.2',kind:'switch',hostname:'asw-02',state:'waiting',source:'neighbour of dsw-01 Gi1/0/1',at:'2026-11-05T03:00:06Z'}]};
+  const l=harness(API,(p,m)=>p==='/api/v1/status'?{status:200,body:{run:{state:'running',phase:'ssh',startedAt,lastSuccessAt:snapshot.generatedAt},running:true,reachabilityAt:reach.checkedAt}}:p==='/api/v1/progress'?{status:200,body:liveProg}:team(p,m));await l.connect();
+  assert.ok(l.el('progress-summary').textContent.startsWith('Live progress (ssh): 1 read · 0 SSH failed · 0 no SSH · 1 logging in · 1 waiting'),l.el('progress-summary').textContent);
+  assert.ok(l.el('progress-rows').innerHTML.indexOf('Logging in')<l.el('progress-rows').innerHTML.indexOf('Read'),'Switches being read are listed first');
+  const before=l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length;await vm.runInContext('loadAll()',l.ctx);
+  assert.equal(l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length,before+1,'Progress is re-read on every poll while a run is going');
+  await vm.runInContext('loadAll()',g.ctx);assert.equal(g.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length,1,'and not polled when idle');}
  // A neighbour switch that does not answer SSH from the collector gets its own row.
  {const n=harness(API,team);await n.connect();
   assert.ok(n.el('sw-rows').innerHTML.includes('HOSTEL_DIST_SW')&&n.el('sw-rows').innerHTML.includes('No SSH from collector'),'No-SSH switches are listed');
@@ -137,5 +156,5 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
- console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, single-switch refresh, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
+ console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, single-switch refresh, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
 })().catch(e=>{console.error(e);process.exitCode=1});

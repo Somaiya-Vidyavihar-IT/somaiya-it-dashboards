@@ -1,6 +1,7 @@
 """Orchestration: full discovery run (LLD workflow), single-switch refresh and the 15-minute reachability check."""
 import logging
 import os
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -64,6 +65,37 @@ def _copy(src, dst):
     os.replace(tmp, dst)
 
 
+class Progress:
+    """Per-switch progress of a full run, for the dashboard's live list (data/run-progress.json).
+
+    Worker threads only mark items; the main thread writes the file (at most about once a second).
+    States: waiting, running, ok, failed, no-ssh (does not answer tcp/22). WLCs are items too.
+    """
+
+    def __init__(self, store, started, trigger, by):
+        self.store, self.lock, self.items, self.t0, self.written = store, threading.Lock(), {}, {}, 0.0
+        self.head = {"startedAt": started, "trigger": trigger, "by": by, "finishedAt": None}
+
+    def mark(self, key, **fields):
+        with self.lock:
+            item = self.items.setdefault(key, {"ip": key, "kind": "switch", "hostname": "", "state": "waiting",
+                                               "error": None, "seconds": None, "source": "", "at": None})
+            if fields.get("state") == "running":
+                self.t0[key] = time.monotonic()
+            elif fields.get("state") in ("ok", "failed") and key in self.t0:
+                fields["seconds"] = round(time.monotonic() - self.t0[key], 1)
+            item.update(fields, at=build.iso_now())
+
+    def write(self, force=False, **head):
+        self.head.update(head)
+        if not force and time.monotonic() - self.written < 1.0:
+            return
+        with self.lock:
+            data = dict(self.head, updatedAt=build.iso_now(), items=[dict(v) for v in self.items.values()])
+        self.store.write(data, "run-progress.json")
+        self.written = time.monotonic()
+
+
 def _discover(cfg, store, trigger, by, started):
     col = cfg["collector"]
     sets = creds.switch_sets(cfg)
@@ -84,6 +116,16 @@ def _discover(cfg, store, trigger, by, started):
     probes = scan.probe(targets + extra, 22, col["connect_timeout"], col["scan_concurrency"])
     open_ips = [ip for ip, lat in probes.items() if lat is not None]
     closed = {ip for ip, lat in probes.items() if lat is None}
+    progress = Progress(store, started, trigger, by)
+    seeds, last_run = set(col["seeds"]), set(known)
+    for ip in probes:
+        if ip in seeds or ip in last_run:
+            progress.mark(ip, source="core seed" if ip in seeds else "last run",
+                          state="waiting" if ip not in closed else "no-ssh",
+                          error=None if ip not in closed else "No answer on SSH (tcp/22)")
+        elif ip not in closed:
+            progress.mark(ip, source="subnet sweep")
+    progress.write(force=True, phase="ssh")
     scan_info = {"subnets": len(cfg["subnets"]), "addresses": len(probes), "sshOpen": len(open_ips)}
 
     # 2-5. SSH authentication, device information, CDP + LLDP, recursive discovery.
@@ -95,6 +137,7 @@ def _discover(cfg, store, trigger, by, started):
     import netmiko.exceptions  # noqa: F401
 
     def work(ip):
+        progress.mark(ip, state="running")
         return _login_collect(cfg, ip, sets, platforms, cred_of, hints)
 
     with ThreadPoolExecutor(max_workers=col["ssh_workers"]) as pool:
@@ -103,10 +146,13 @@ def _discover(cfg, store, trigger, by, started):
             scanned.add(ip)
             pending.add(pool.submit(work, ip))
         while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            # The timeout only refreshes the progress file (switches still logging in).
+            done, pending = wait(pending, timeout=2, return_when=FIRST_COMPLETED)
             for fut in done:
                 rec = fut.result()
                 records.append(rec)
+                progress.mark(rec["ip"], state="ok" if rec["ok"] else "failed", hostname=rec.get("hostname") or "",
+                              error=None if rec["ok"] else rec.get("error"))
                 _add_hints(hints, rec.get("neighbors"))
                 new = []
                 for n in rec.get("neighbors", []):
@@ -114,14 +160,19 @@ def _discover(cfg, store, trigger, by, started):
                     if ip and ip not in scanned and config_mod.in_scope(cfg, ip) and build.neighbor_kind(n) == "switch":
                         scanned.add(ip)
                         new.append(ip)
+                        progress.mark(ip, hostname=n.get("name", "")[:80],
+                                      source=f"neighbour of {rec.get('hostname') or rec['ip']} {n.get('localPort', '')}".strip())
                 if new:
                     reach = scan.probe(new, 22, col["connect_timeout"], 64)
                     for ip in new:
                         if reach.get(ip) is None:
                             closed.add(ip)
+                            progress.mark(ip, state="no-ssh", error="No answer on SSH (tcp/22)")
                         else:
                             pending.add(pool.submit(work, ip))
-            store.status(done=len(records), total=len(records) + len(pending))
+            if done:
+                store.status(done=len(records), total=len(records) + len(pending))
+            progress.write(force=not pending)
     store.write(platforms, "state", "platforms.json")
     store.write(cred_of, "state", "credentials.json")
     scan_info["collected"] = sum(r["ok"] for r in records)
@@ -130,17 +181,28 @@ def _discover(cfg, store, trigger, by, started):
     wlcs = []
     if cfg["wlc"]["hosts"]:
         store.status(phase="wlc")
+        for h in cfg["wlc"]["hosts"]:
+            progress.mark(h, kind="wlc", source="WLC list in config")
+        progress.write(force=True, phase="wlc")
         wuser, wpass = creds.get(cfg)
-        wlcs = [wlc.collect(h, wuser, wpass, cfg) for h in cfg["wlc"]["hosts"]]
+        for h in cfg["wlc"]["hosts"]:
+            progress.mark(h, state="running")
+            progress.write(force=True)
+            w = wlc.collect(h, wuser, wpass, cfg)
+            progress.mark(h, state="ok" if w["ok"] else "failed", error=None if w["ok"] else w.get("error"),
+                          hostname=f"{len(w.get('aps', []))} APs" if w["ok"] else "")
+            wlcs.append(w)
 
     # 6. Report generation.
     store.status(phase="report")
+    progress.write(force=True, phase="report")
     prev_counters = store.read("state", "counters.json", default={}) or {}
     snapshot, baseline, counters = build.build(
         cfg, records, wlcs, store.read("state", "links-baseline.json", default={}),
         prev_counters, scan_info,
         {"trigger": trigger, "triggeredBy": by, "startedAt": started}, ssh_closed=frozenset(closed))
     snapshot["finishedAt"] = build.iso_now()
+    progress.write(force=True, phase="done", finishedAt=snapshot["finishedAt"])
     store.write(baseline, "state", "links-baseline.json")
     store.write(counters, "state", "counters.json")
     # Everything build() needs, so one switch can later be re-read and the snapshot rebuilt without a

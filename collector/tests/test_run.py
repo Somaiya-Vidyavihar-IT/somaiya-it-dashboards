@@ -232,6 +232,20 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual((dev["status"], dev["hostname"]), ("ok", "asw-50"))
         self.assertNotIn("10.0.1.50", store.read("state", "last-run.json")["closed"])
 
+    def test_progress_lists_every_switch_and_wlc_with_its_result(self):
+        store = self._full_run()
+        prog = store.read("run-progress.json")
+        self.assertEqual(prog["phase"], "done")
+        self.assertIsNotNone(prog["finishedAt"])
+        items = {i["ip"]: i for i in prog["items"]}
+        self.assertEqual(items["10.0.0.1"]["state"], "ok")
+        self.assertEqual(items["10.0.0.1"]["hostname"], "core-01")
+        self.assertIsInstance(items["10.0.0.1"]["seconds"], float)
+        self.assertEqual(items["10.0.1.2"]["source"], "neighbour of dsw-01 Gi1/0/1", "found through CDP/LLDP")
+        self.assertEqual((items["10.0.1.50"]["state"], items["10.0.1.50"]["hostname"]), ("no-ssh", "unknown-sw"))
+        self.assertEqual((items["10.0.0.5"]["kind"], items["10.0.0.5"]["state"]), ("wlc", "ok"))
+        self.assertFalse([i for i in prog["items"] if i["state"] in ("waiting", "running")], "nothing left pending")
+
     def test_refresh_refusals(self):
         store = Store(self.tmp.name)
         self.assertEqual(self._refresh("10.0.1.2", None)[0], 1)

@@ -206,6 +206,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._file("latest.json", "application/json")
         if path == "/api/v1/reachability":
             return self._file("reachability.json", "application/json")
+        if path == "/api/v1/progress":  # per-switch progress of the current or last full run
+            return self._file("run-progress.json", "application/json")
         if path == "/api/v1/download/inventory.xlsx":
             return self._file("inventory-latest.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                               "somaiya-network-inventory.xlsx")

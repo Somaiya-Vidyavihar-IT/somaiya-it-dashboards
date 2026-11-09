@@ -118,6 +118,13 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertIn("attachment", resp.getheader("Content-Disposition"))
         self.assertEqual(body, b"graph campus {}\n")
 
+    def test_progress_served_to_team_only(self):
+        self.assertEqual(self.req("GET", "/api/v1/progress", "good")[0].status, 404)
+        self.store.write({"startedAt": "x", "items": [{"ip": "10.0.0.1", "state": "running"}]}, "run-progress.json")
+        self.assertEqual(self.req("GET", "/api/v1/progress", "outsider")[0].status, 403)
+        resp, body = self.req("GET", "/api/v1/progress", "good")
+        self.assertEqual(json.loads(body)["items"][0]["state"], "running")
+
     def test_run_now_starts_once(self):
         self.assertEqual(self.req("POST", "/api/v1/run", "outsider")[0].status, 403)
         self.assertEqual(self.runs, [])
