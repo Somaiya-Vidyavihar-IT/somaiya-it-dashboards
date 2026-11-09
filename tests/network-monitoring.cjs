@@ -10,11 +10,12 @@ assert.ok(!/<button(?![^>]*type="button")/.test(html),'Buttons declare type="but
 
 const API='https://netmon.test:8443';
 const snapshot={schema:1,generatedAt:'2026-11-05T02:30:00Z',trigger:'scheduled',triggeredBy:'',
- summary:{switches:3,collected:2,failed:1,links:1,linksLost:0,uplinksDown:0,problemPorts:1,poeHigh:1,cpuHigh:0,aps:2,apsUp:1,findings:2},
+ summary:{switches:4,collected:2,failed:1,noSsh:1,links:1,linksLost:0,uplinksDown:0,problemPorts:1,poeHigh:1,cpuHigh:0,aps:2,apsUp:1,findings:2},
  institutes:[{name:'DC',switches:1,failed:0,aps:0,apsDown:0,problems:0},{name:'Engineering',switches:2,failed:1,aps:2,apsDown:1,problems:2}],
  devices:[
   {ip:'10.0.0.1',hostname:'core-01',institute:'DC',platform:'cisco_nxos',model:'N9K-C93180YC-FX',serial:'S1',version:'10.2',uptime:'1 week',role:'core',depth:0,status:'ok',error:null,warnings:[],cpu:4,poe:null,ports:{total:54,connected:20,errDisabled:0},errDelta:0,flags:[],neighbors:[]},
   {ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',institute:'Engineering',platform:'cisco_ios',model:'C9300-48P',serial:'S2',version:'17.9',uptime:'2 weeks',role:'distribution',depth:1,status:'ok',error:null,warnings:[],cpu:10,poe:{availableW:740,usedW:700,pct:95},ports:{total:52,connected:30,errDisabled:1},errDelta:null,flags:['poe','err-disabled'],commands:[{command:'terminal width 511',purpose:'session',result:'setup',detail:''},{command:'show power inline',purpose:'poe',result:'rejected',detail:'% Invalid <b>input</b>',lines:2,seconds:0.4}],neighbors:[{localPort:'Te1/1/4',name:'core-01',ip:'10.0.0.1',remotePort:'Eth1/10',platform:'N9K',via:['cdp','lldp'],kind:'switch',peer:'10.0.0.1'}]},
+  {ip:'10.0.9.1',hostname:'HOSTEL_DIST_SW',institute:'Engineering',platform:'',model:'C9300-24T',serial:'',version:'',uptime:'',role:'distribution',depth:1,status:'no-ssh',error:'Does not answer SSH (tcp/22) from the collector',warnings:[],cpu:null,poe:null,ports:null,errDelta:null,flags:['no-ssh'],neighbors:[],commands:[],seenFrom:[{ip:'10.0.0.1',hostname:'core-01',port:'Eth1/11',remotePort:'Te1/1/1'}]},
   {ip:'10.0.1.3',hostname:'',institute:'Engineering',platform:'',model:'',serial:'',version:'',uptime:'',role:'unknown',depth:null,status:'failed',error:'SSH authentication failed',warnings:[],cpu:null,poe:null,ports:null,errDelta:null,flags:['ssh-failed'],neighbors:[]}],
  links:[{a:'10.0.0.1',aPort:'Eth1/10',b:'10.0.1.1',bPort:'Te1/1/4',via:['cdp','lldp'],both:true,status:'up',uplink:true,downstream:'10.0.1.1',aName:'core-01',bName:'dsw-01'}],
  problemPorts:[{ip:'10.0.1.1',hostname:'dsw-01',institute:'Engineering',port:'Gi1/0/9',issue:'err-disabled',detail:'Port is err-disabled',neighbor:''}],
@@ -57,7 +58,7 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  assert.ok(h.el('port-rows').innerHTML.includes('Gi1/0/9'));assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  assert.equal(h.el('run-now').hidden,false,'Run now shown to the IT Network Team');assert.equal(h.el('cert-help').hidden,true,'No certificate help once the API answers');
  assert.ok(h.el('data-note').textContent.includes('Last full run'));
- vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",h.ctx);assert.ok(h.el('sw-count').textContent.startsWith('1 of 3'));
+ vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",h.ctx);assert.ok(h.el('sw-count').textContent.startsWith('1 of 4'));
  vm.runInContext("document.getElementById('ap-state').value='down';renderAps()",h.ctx);assert.ok(h.el('ap-rows').innerHTML.includes('ap-hall-09')&&!h.el('ap-rows').innerHTML.includes('ap-lib-01'));
  vm.runInContext("openDevice('10.0.1.1')",h.ctx);assert.equal(h.el('details').open,true);assert.ok(h.el('detail-body').innerHTML.includes('Te1/1/4'));
  {const body=h.el('detail-body').innerHTML;assert.ok(body.includes('<code>show power inline</code>')&&body.includes('Rejected by the switch')&&body.includes('Sent at login'),'Commands sent to the switch are listed with their result');
@@ -69,6 +70,14 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  {const o=harness(API,(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:1}}:team(p,m));await o.connect();
   vm.runInContext("openDevice('10.0.1.3')",o.ctx);assert.equal(o.el('refresh-switch').hidden,true,'No refresh button on an API without the endpoint');
   assert.ok(o.el('refresh-note').textContent.includes('needs the updated collector'));}
+ // A neighbour switch that does not answer SSH from the collector gets its own row.
+ {const n=harness(API,team);await n.connect();
+  assert.ok(n.el('sw-rows').innerHTML.includes('HOSTEL_DIST_SW')&&n.el('sw-rows').innerHTML.includes('No SSH from collector'),'No-SSH switches are listed');
+  assert.ok(n.el('stats').innerHTML.includes('1 no SSH'));
+  vm.runInContext("document.getElementById('sw-state').value='no-ssh';renderSwitches()",n.ctx);assert.ok(n.el('sw-count').textContent.startsWith('1 of 4'));
+  vm.runInContext("openDevice('10.0.9.1')",n.ctx);const body=n.el('detail-body').innerHTML;
+  assert.ok(body.includes('core-01 Eth1/11 (its Te1/1/1)'),'Shows where it was seen');assert.ok(body.includes('does not answer SSH (tcp/22) from the collector'));
+  assert.equal(n.el('refresh-switch').textContent,'Reconnect');assert.ok(n.el('refresh-switch').title.startsWith('Check SSH'));}
  // Refresh / reconnect one switch from its details dialog.
  {const rs={run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt,refresh:{},refreshing:false};
   const at='2026-11-05T04:00:00Z',refreshed={...snapshot,refreshedAt:at,devices:snapshot.devices.map(d=>d.ip==='10.0.1.3'?{...d,hostname:'asw-03',status:'ok',error:null,flags:[],refreshedAt:at,refreshedBy:'net@somaiya.edu'}:d)};

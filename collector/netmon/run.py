@@ -232,8 +232,18 @@ def refresh_switch(cfg, ip, by="", locked=False):
         last = store.read("state", "last-run.json", default=None)
         if not last:
             raise RefreshRefused("Switch refresh needs one full discovery run with the updated collector first.")
-        if ip not in {r["ip"] for r in last["records"]}:
+        no_ssh = ip not in {r["ip"] for r in last["records"]}
+        if no_ssh and ip not in set(last.get("closed", [])):
             raise RefreshRefused(f"{ip} is not a switch from the last full discovery run.")
+        if no_ssh:
+            # Listed as "no SSH from the collector": check tcp/22 again before any login.
+            col = cfg["collector"]
+            if scan.probe([ip], 22, max(col["connect_timeout"], 2.0), 1).get(ip) is None:
+                store.write({"state": "done", "ip": ip, "by": by, "startedAt": started, "finishedAt": build.iso_now(),
+                             "ok": False, "error": "Still no answer on SSH (tcp/22) from the collector."},
+                            "refresh-status.json")
+                store.audit(f"refresh-done ip={ip} ok=False no-ssh")
+                return 1
         sets = creds.switch_sets(cfg)
         platforms = store.read("state", "platforms.json", default={}) or {}
         cred_of = store.read("state", "credentials.json", default={}) or {}
@@ -248,9 +258,14 @@ def refresh_switch(cfg, ip, by="", locked=False):
         # (One finishing in the milliseconds between this read and the writes below would be
         # overwritten until the next run; accepted, since both carry almost the same data.)
         last = store.read("state", "last-run.json", default=None) or last
-        if ip not in {r["ip"] for r in last["records"]}:
+        if ip in {r["ip"] for r in last["records"]}:
+            records = [rec if r["ip"] == ip else r for r in last["records"]]
+        elif ip in set(last.get("closed", [])):
+            # It answers SSH now: it becomes a normal record. Switches behind it wait for the next full run.
+            records = last["records"] + [rec]
+            last = dict(last, closed=[c for c in last["closed"] if c != ip])
+        else:
             raise RefreshRefused(f"{ip} is no longer in the last full discovery run.")
-        records = [rec if r["ip"] == ip else r for r in last["records"]]
         # Error deltas: other switches keep the base their full run used; this one counts from its last read.
         counters = store.read("state", "counters.json", default={}) or {}
         base = dict(last.get("countersBase") or {})
@@ -291,7 +306,8 @@ def reach_run(cfg):
     col = cfg["collector"]
     store = Store(col["data_dir"])
     latest = store.read("latest.json", default={}) or {}
-    ips = [d["ip"] for d in latest.get("devices", [])] + list(cfg["wlc"]["hosts"])
+    # "no-ssh" switches are known not to answer tcp/22; Reconnect or the next full run re-checks them.
+    ips = [d["ip"] for d in latest.get("devices", []) if d.get("status") != "no-ssh"] + list(cfg["wlc"]["hosts"])
     results = scan.probe(ips, 22, max(col["connect_timeout"], 2.0), 256)
     prev = (store.read("reachability.json", default={}) or {}).get("results", {})
     now = build.iso_now()

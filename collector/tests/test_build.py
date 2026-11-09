@@ -71,7 +71,7 @@ class BuildSnapshot(unittest.TestCase):
         self.assertEqual(self.dev["10.0.0.1"]["institute"], "DC")
 
     def test_links_merge_both_sides_and_mark_uplinks(self):
-        live = [l for l in self.snap["links"] if l["status"] == "up"]
+        live = [l for l in self.snap["links"] if l["status"] == "up" and "10.0.1.50" not in (l["a"], l["b"])]
         self.assertEqual(len(live), 2, live)
         core_link = next(l for l in live if "10.0.0.1" in (l["a"], l["b"]))
         self.assertTrue(core_link["both"])
@@ -88,10 +88,33 @@ class BuildSnapshot(unittest.TestCase):
         self.assertIsNone(d["errDelta"], "no delta on the first run")
         self.assertEqual(self.dev["10.0.1.3"]["status"], "failed")
         types = [f["type"] for f in self.snap["findings"]]
-        for t in ("ssh-failed", "cpu", "poe", "ap-not-in-wlc", "ap-down", "neighbor-not-collected"):
+        for t in ("ssh-failed", "cpu", "poe", "ap-not-in-wlc", "ap-down", "no-ssh"):
             self.assertIn(t, types)
-        msg = next(f["message"] for f in self.snap["findings"] if f["type"] == "neighbor-not-collected")
-        self.assertIn("does not answer SSH", msg)
+
+    def test_neighbour_switch_without_ssh_gets_its_own_row(self):
+        """Seen live: the hostel distribution switches under the core block SSH from the collector and
+        were only an info finding, so the dashboard showed no hostel switches at all."""
+        d = self.dev["10.0.1.50"]
+        self.assertEqual((d["status"], d["hostname"], d["institute"], d["flags"]), ("no-ssh", "unknown-sw", "Engineering", ["no-ssh"]))
+        self.assertEqual(d["role"], "access", "linked under asw-02, three hops from the core")
+        self.assertEqual(d["seenFrom"], [{"ip": "10.0.1.2", "hostname": "asw-02", "port": "Gi1/0/3", "remotePort": "Gi0/1"}])
+        link = next(l for l in self.snap["links"] if "10.0.1.50" in (l["a"], l["b"]))
+        self.assertEqual((link["downstream"], link["uplink"]), ("10.0.1.50", True))
+        msg = next(f["message"] for f in self.snap["findings"] if f["type"] == "no-ssh")
+        self.assertIn("asw-02 Gi1/0/3, does not answer SSH", msg)
+        s = self.snap["summary"]
+        self.assertEqual((s["switches"], s["collected"], s["failed"], s["noSsh"]), (5, 3, 1, 1))
+        self.assertNotIn("neighbor-not-collected", [f["type"] for f in self.snap["findings"]])
+
+    def test_neighbour_switch_without_ip_or_out_of_scope_stays_a_finding(self):
+        recs = campus()
+        recs[2]["neighbors"].append(nbr("Gi1/0/4", "noip-sw", "", "Gi0/1"))
+        recs[2]["neighbors"].append(nbr("Gi1/0/5", "far-sw", "192.0.2.9", "Gi0/1"))
+        snap, _, _ = build.build(CFG, recs, WLC, now="2026-11-05T02:30:00Z", ssh_closed=frozenset({"192.0.2.9"}))
+        msgs = [f["message"] for f in snap["findings"] if f["type"] == "neighbor-not-collected"]
+        self.assertTrue(any("noip-sw" in m and "advertised no management IP" in m for m in msgs), msgs)
+        self.assertTrue(any("far-sw" in m and "outside the configured subnets" in m for m in msgs), msgs)
+        self.assertNotIn("192.0.2.9", [d["ip"] for d in snap["devices"]])
 
     def test_aruba_inventory_joins_wlc_switch_and_ap_side(self):
         aps = {a["name"]: a for a in self.snap["aps"]}

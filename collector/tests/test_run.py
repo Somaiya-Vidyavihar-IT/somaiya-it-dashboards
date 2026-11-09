@@ -208,6 +208,30 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual((status["state"], status["ok"]), ("done", False))
         self.assertNotIn("10.0.1.2", store.read("state", "credentials.json"))
 
+    def test_no_ssh_switch_listed_skipped_by_reach_and_reconnects_when_open(self):
+        store = self._full_run()  # 10.0.1.50 (unknown-sw) is asw-02's neighbour and does not answer tcp/22
+        latest = store.read("latest.json")
+        self.assertEqual(next(d for d in latest["devices"] if d["ip"] == "10.0.1.50")["status"], "no-ssh")
+        with mock.patch("netmon.scan.probe", side_effect=lambda ips, *a, **k: {ip: 1.0 for ip in ips}) as probe:
+            run.reach_run(self.cfg)
+        self.assertNotIn("10.0.1.50", probe.call_args.args[0], "no-ssh switches are not up/down checked")
+        # Reconnect while still blocked: one tcp/22 check, no login, nothing rebuilt.
+        with mock.patch("netmon.scan.probe", return_value={"10.0.1.50": None}), \
+                mock.patch("netmon.devices.collect", side_effect=AssertionError("no login")):
+            self.assertEqual(run.refresh_switch(self.cfg, "10.0.1.50", "net@somaiya.edu"), 1)
+        self.assertEqual(store.read("refresh-status.json")["error"], "Still no answer on SSH (tcp/22) from the collector.")
+        self.assertFalse(store.running("refresh.lock"))
+        # Once SSH is allowed: logged in, becomes a normal collected switch.
+        fresh = dict(copy.deepcopy(self.records["10.0.1.2"]), ip="10.0.1.50", hostname="asw-50", neighbors=[])
+        with mock.patch("netmon.scan.probe", return_value={"10.0.1.50": 1.0}), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.devices.detect_platform", return_value="cisco_s300"), \
+                mock.patch("netmon.devices.collect", return_value=fresh):
+            self.assertEqual(run.refresh_switch(self.cfg, "10.0.1.50", "net@somaiya.edu"), 0)
+        dev = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.50")
+        self.assertEqual((dev["status"], dev["hostname"]), ("ok", "asw-50"))
+        self.assertNotIn("10.0.1.50", store.read("state", "last-run.json")["closed"])
+
     def test_refresh_refusals(self):
         store = Store(self.tmp.name)
         self.assertEqual(self._refresh("10.0.1.2", None)[0], 1)

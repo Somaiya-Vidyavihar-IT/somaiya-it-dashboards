@@ -80,6 +80,10 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     # ---- neighbour observations -> links ----
     obs = defaultdict(list)  # (A, B) -> [(portA, reportedPortB, via)]
     unresolved = {}
+    # Neighbour switches whose management IP is in scope but did not answer SSH (tcp/22) from the
+    # collector. They get their own row ("no-ssh") linked to the switch that sees them, so a blocked
+    # distribution switch (seen live: the hostel dists under the core) is visible, not just a finding.
+    no_ssh = {}  # ip -> [(record that sees it, neighbour entry)]
     wlc_aps = [a for w in wlcs if w.get("ok") for a in w.get("aps", [])]
     ap_names = {a["name"].lower() for a in wlc_aps if a.get("name")}
     ap_macs = {a["mac"] for a in wlc_aps if a.get("mac")}
@@ -90,6 +94,10 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
             if n["kind"] in ("ap", "phone"):
                 continue
             peer = resolve(n)
+            if peer is None and n["kind"] == "switch" and n["ip"] and n["ip"] in ssh_closed \
+                    and config_mod.in_scope(cfg, n["ip"]):
+                peer = n["ip"]
+                no_ssh.setdefault(peer, []).append((r, n))
             n["peer"] = peer or ""
             if peer is None or peer == r["ip"]:
                 if peer is None and n["kind"] == "switch":
@@ -233,6 +241,22 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                            "peer": n.get("peer", "")} for n in r["neighbors"]]
         devices.append(d)
 
+    for ip, seen in no_ssh.items():
+        name = next((n["name"] for _, n in seen if n["name"]), "")[:80]
+        platform = next((n["platform"] for _, n in seen if n["platform"]), "")
+        seen_from = [{"ip": r["ip"], "hostname": r["hostname"], "port": n["localPort"], "remotePort": n["remotePort"]}
+                     for r, n in seen]
+        devices.append({"ip": ip, "hostname": name, "institute": institute(ip), "platform": "",
+                        "model": re.sub(r"^cisco\s+", "", platform, flags=re.I)[:60], "serial": "", "version": "",
+                        "uptime": "", "role": role_of(ip), "depth": depth.get(ip), "status": "no-ssh",
+                        "error": "Does not answer SSH (tcp/22) from the collector", "warnings": [], "cpu": None,
+                        "poe": None, "ports": None, "errDelta": None, "flags": ["no-ssh"], "neighbors": [],
+                        "commands": [], "seenFrom": seen_from})
+        where = ", ".join(f"{s['hostname'] or s['ip']} {s['port']}" for s in seen_from)
+        finding("warning", "no-ssh", f"Switch {name or ip} ({ip}), seen on {where}, does not answer SSH (tcp/22) from "
+                "the collector, so it and the switches behind it are not read. Allow SSH from the collector "
+                "(VTY access list or firewall), then use Reconnect.", ip, name)
+
     host_of = {d["ip"]: d["hostname"] for d in devices}
     dev_by_ip = {d["ip"]: d for d in devices}
     for link in links.values():
@@ -263,7 +287,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
             finding("warning", "wlc-failed", f"WLC {w['host']} collection failed: {w['error']}", w["host"])
 
     summary = {
-        "switches": len(devices), "collected": len(ok), "failed": len(devices) - len(ok),
+        "switches": len(devices), "collected": len(ok), "failed": sum(d["status"] == "failed" for d in devices),
+        "noSsh": len(no_ssh),
         "links": sum(l["status"] in ("up", "down") for l in links.values()),
         "linksLost": sum(l["status"] == "lost" for l in links.values()),
         "uplinksDown": sum(l["uplink"] and l["status"] in ("down", "lost") for l in links.values()),
