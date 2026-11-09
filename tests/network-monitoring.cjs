@@ -71,20 +71,25 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  vm.runInContext("openDevice('10.0.0.1')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'),'Older snapshots without a command list say so');
  vm.runInContext("openDevice('10.0.1.3')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'));
  await vm.runInContext('runNow()',h.ctx);assert.ok(h.calls.some(c=>c.url===API+'/api/v1/run'&&c.method==='POST'),'Run now posts to the API');
+ assert.equal(h.el('discovery-view').classList.contains('hidden'),false,'Run now opens the Discovery tab');
  // An older campus API (before single-switch refresh): no button, and the dialog says what to update.
  {const o=harness(API,(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:1}}:team(p,m));await o.connect();
   vm.runInContext("openDevice('10.0.1.3')",o.ctx);assert.equal(o.el('refresh-switch').hidden,true,'No refresh button on an API without the endpoint');
   assert.ok(o.el('refresh-note').textContent.includes('needs the updated collector'));}
  // Per-switch progress of the last full run, and live while one runs.
  {const g=harness(API,team);await g.connect();
-  assert.equal(g.el('progress-panel').hidden,false,'Progress list shown after a run');
+  assert.equal(g.el('run-line').hidden,true,'No run line when idle');assert.equal(g.el('view-progress').hidden,true);
+  assert.ok(g.el('disc-status').textContent.startsWith('Last full run finished'),g.el('disc-status').textContent);
   assert.ok(g.el('progress-summary').textContent.startsWith('Last full run, switch by switch')&&g.el('progress-summary').textContent.includes('2 read · 1 SSH failed · 1 no SSH'));
   const rows=g.el('progress-rows').innerHTML;assert.ok(rows.includes('HOSTEL_DIST_SW')&&rows.includes('WLC · 412 APs')&&rows.includes('neighbour of core-01 Eth1/11'));
   assert.ok(rows.includes('&lt;b&gt;x&lt;/b&gt;')&&!rows.includes('<b>x'),'Errors are escaped');assert.ok(rows.indexOf('10.0.1.3')<rows.indexOf('core-01'),'Failures listed before successes');
   vm.runInContext("document.getElementById('progress-filter').value='no-ssh';renderProgress()",g.ctx);assert.ok(g.el('progress-rows').innerHTML.includes('HOSTEL_DIST_SW')&&!g.el('progress-rows').innerHTML.includes('core seed'),'Filter keeps only no-SSH rows');
   const startedAt='2026-11-05T03:00:00Z',liveProg={startedAt,finishedAt:null,phase:'ssh',items:[{ip:'10.0.0.1',kind:'switch',hostname:'core-01',state:'ok',seconds:3,source:'core seed',at:'2026-11-05T03:00:05Z'},{ip:'10.0.1.1',kind:'switch',hostname:'dsw-01',state:'running',source:'neighbour of core-01 Eth1/10',at:'2026-11-05T03:00:06Z'},{ip:'10.0.1.2',kind:'switch',hostname:'asw-02',state:'waiting',source:'neighbour of dsw-01 Gi1/0/1',at:'2026-11-05T03:00:06Z'}]};
   const l=harness(API,(p,m)=>p==='/api/v1/status'?{status:200,body:{run:{state:'running',phase:'ssh',startedAt,lastSuccessAt:snapshot.generatedAt},running:true,reachabilityAt:reach.checkedAt}}:p==='/api/v1/progress'?{status:200,body:liveProg}:team(p,m));await l.connect();
-  assert.ok(l.el('progress-summary').textContent.startsWith('Live progress (ssh): 1 read · 0 SSH failed · 0 no SSH · 1 logging in · 1 waiting'),l.el('progress-summary').textContent);
+  assert.ok(l.el('progress-summary').textContent.startsWith('Live, switch by switch (ssh): 1 read · 0 SSH failed · 0 no SSH · 1 logging in · 1 waiting'),l.el('progress-summary').textContent);
+  assert.equal(l.el('run-line').hidden,false);assert.equal(l.el('view-progress').hidden,false,'Status box links to the Discovery tab while running');
+  assert.ok(l.el('disc-status').textContent.startsWith('Discovery running: ssh'));
+  vm.runInContext("setView('discovery')",l.ctx);assert.equal(l.el('discovery-view').classList.contains('hidden'),false);assert.equal(l.el('view-progress').hidden,true,'No link while already on the tab');
   assert.ok(l.el('progress-rows').innerHTML.indexOf('Logging in')<l.el('progress-rows').innerHTML.indexOf('Read'),'Switches being read are listed first');
   const before=l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length;await vm.runInContext('loadAll()',l.ctx);
   assert.equal(l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length,before+1,'Progress is re-read on every poll while a run is going');
