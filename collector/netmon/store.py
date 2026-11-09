@@ -5,6 +5,11 @@ import time
 from datetime import datetime, timedelta, timezone
 
 LOCK_STALE_SECONDS = 3 * 3600
+REFRESH_STALE_SECONDS = 15 * 60  # one switch: login + about a dozen show commands
+
+
+def _stale(name):
+    return REFRESH_STALE_SECONDS if name == "refresh.lock" else LOCK_STALE_SECONDS
 
 
 class Store:
@@ -30,11 +35,12 @@ class Store:
             json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, target)
 
-    # ---- one run at a time (scheduled and Run now share this lock) ----
-    def acquire(self, info):
-        lock = self.path("state", "run.lock")
+    # ---- one run at a time (scheduled and Run now share run.lock; a single-switch refresh uses
+    # refresh.lock, so one refresh runs at a time and a full run is never blocked by one) ----
+    def acquire(self, info, name="run.lock"):
+        lock = self.path("state", name)
         try:
-            if time.time() - os.path.getmtime(lock) > LOCK_STALE_SECONDS:
+            if time.time() - os.path.getmtime(lock) > _stale(name):
                 os.remove(lock)
         except FileNotFoundError:
             pass
@@ -46,16 +52,16 @@ class Store:
             json.dump(dict(info, pid=os.getpid()), fh)
         return True
 
-    def release(self):
+    def release(self, name="run.lock"):
         try:
-            os.remove(self.path("state", "run.lock"))
+            os.remove(self.path("state", name))
         except FileNotFoundError:
             pass
 
-    def running(self):
-        lock = self.path("state", "run.lock")
+    def running(self, name="run.lock"):
+        lock = self.path("state", name)
         try:
-            return time.time() - os.path.getmtime(lock) <= LOCK_STALE_SECONDS
+            return time.time() - os.path.getmtime(lock) <= _stale(name)
         except FileNotFoundError:
             return False
 

@@ -16,6 +16,9 @@ Nothing here writes to devices. Every command is asserted at import time to star
 | `netmon-reach` | every 15 minutes | `python -m netmon reach` (TCP/22 to known switches and WLCs, no login) |
 | `netmon-api` | at startup, auto-restart | `python -m netmon serve` |
 | Run now (dashboard) | on demand, IT Network Team | same as the full run; one run at a time |
+| Refresh switch / Reconnect (dashboard, switch details) | on demand, IT Network Team | `python -m netmon refresh --ip <IP>` |
+
+**Single-switch refresh.** Logs in to that one switch only (every credential set again, remembered one first) and re-runs its `show` commands. The snapshot is then rebuilt from the last full run's raw data (`data\state\last-run.json`) with that switch replaced, so links, roles, findings and APs stay consistent; no other switch or WLC is contacted, and new neighbours it reveals wait for the next full run. Only switches already in the last full run can be refreshed, one at a time (`state\refresh.lock`), and not while a full run is going. It needs one full run with this version first (that run writes `last-run.json`). Output goes to `data\refresh.log`; the result to `data\refresh-status.json`.
 
 ## Install on the collector host (Windows 10/11 or Windows Server)
 
@@ -72,7 +75,7 @@ The page sends the hub's shared Google access token as `Authorization: Bearer`. 
 3. caches a successful check for at most 5 minutes, keyed by a SHA-256 hash of the token. Tokens are never logged or written to disk;
 4. answers CORS only for `server.allowed_origins` (the hub origin), including the Private Network Access preflight.
 
-The token also carries the hub's read-only Sheets scope, because the hub shares one session. The API only forwards it to Google `tokeninfo`. `audit.log` records every Run now request with the requester's email.
+The token also carries the hub's read-only Sheets scope, because the hub shares one session. The API only forwards it to Google `tokeninfo`. `audit.log` records every Run now and switch refresh request with the requester's email.
 
 ## Data handling
 

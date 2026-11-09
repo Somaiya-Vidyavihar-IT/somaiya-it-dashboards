@@ -169,13 +169,13 @@ tests/
   session.cjs                     # Session handoff, recovery, logout, expiry
   ai-review.cjs                   # Review mapping, escaping, filters, exports
   uat.cjs                         # UAT mapping, merged dates, filters, exports, lifecycle
-  network-monitoring.cjs          # Network page access, escaping, filters, Run now, expiry
+  network-monitoring.cjs          # Network page access, escaping, filters, Run now, switch refresh, expiry
   table-sort.cjs                  # Queue sorting, hub accessibility, release token
   koha-screenshots.cjs            # KOHA screenshot links, previews, export
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-06-1`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-09-1`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 

@@ -58,7 +58,9 @@ class ApiEndToEnd(unittest.TestCase):
         self.runs = []
         verifier = Verifier(CLIENT, ["somaiya.edu"], ["net@somaiya.edu"],
                             fetch=lambda t: info() if t == "good" else info(email="other@somaiya.edu") if t == "outsider" else None)
-        self.httpd = NetmonServer(cfg, verifier=verifier, start_run=self.runs.append)
+        self.refreshes = []
+        self.httpd = NetmonServer(cfg, verifier=verifier, start_run=self.runs.append,
+                                  start_refresh=lambda email, ip: self.refreshes.append((email, ip)))
         self.store = Store(self.tmp.name)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -67,14 +69,17 @@ class ApiEndToEnd(unittest.TestCase):
         self.httpd.server_close()
         self.tmp.cleanup()
 
-    def req(self, method, path, token=None, origin=ORIGIN, extra=None):
+    def req(self, method, path, token=None, origin=ORIGIN, extra=None, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=5)
         headers = dict(extra or {})
+        if body is not None:
+            body = json.dumps(body).encode() if not isinstance(body, bytes) else body
+            headers["Content-Type"] = "application/json"
         if token:
             headers["Authorization"] = "Bearer " + token
         if origin:
             headers["Origin"] = origin
-        conn.request(method, path, headers=headers)
+        conn.request(method, path, body=body, headers=headers)
         resp = conn.getresponse()
         body = resp.read()
         conn.close()
@@ -125,6 +130,40 @@ class ApiEndToEnd(unittest.TestCase):
         self.store.release()
         with open(self.store.path("audit.log"), encoding="utf-8") as fh:
             self.assertIn("run-request by=net@somaiya.edu", fh.read())
+
+
+    def test_refresh_one_switch(self):
+        post = lambda body, token="good": self.req("POST", "/api/v1/refresh", token, body=body)
+        self.assertEqual(post({"ip": "10.0.0.1"}, "outsider")[0].status, 403)
+        self.assertEqual(post({"ip": "10.0.0.1; whoami"})[0].status, 400)
+        self.assertEqual(post({"ip": ["10.0.0.1"]})[0].status, 400)
+        self.assertEqual(post(b"x" * 2000)[0].status, 400)
+        resp, body = post({"ip": "10.0.0.1"})
+        self.assertEqual(resp.status, 409)
+        self.assertIn("full discovery run with the updated collector", json.loads(body)["error"])
+        self.store.write({"records": []}, "state", "last-run.json")
+        self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.1"}]}, "latest.json")
+        self.assertEqual(post({"ip": "10.0.0.9"})[0].status, 404, "only switches from the last run")
+        self.assertEqual(self.refreshes, [])
+        self.assertEqual(post({"ip": "10.0.0.1"})[0].status, 202)
+        self.assertEqual(self.refreshes, [("net@somaiya.edu", "10.0.0.1")])
+        self.assertTrue(self.store.running("refresh.lock"), "the API takes the lock for the child process")
+        resp, body = post({"ip": "10.0.0.1"})
+        self.assertEqual(resp.status, 409)
+        self.assertIn("10.0.0.1 is being refreshed", json.loads(body)["error"])
+        status = json.loads(self.req("GET", "/api/v1/status", "good")[1])
+        self.assertTrue(status["refreshing"])
+        self.assertEqual((status["refresh"]["state"], status["refresh"]["ip"]), ("running", "10.0.0.1"))
+        self.assertFalse(status["running"])
+        self.store.release("refresh.lock")
+        self.assertTrue(self.store.acquire({"trigger": "test"}))
+        self.assertEqual(post({"ip": "10.0.0.1"})[0].status, 409, "not during a full run")
+        self.store.release()
+        resp, _ = self.req("OPTIONS", "/api/v1/refresh", extra={"Access-Control-Request-Method": "POST",
+                                                                "Access-Control-Request-Headers": "content-type"})
+        self.assertIn("Content-Type", resp.getheader("Access-Control-Allow-Headers"))
+        with open(self.store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn("refresh-request ip=10.0.0.1 by=net@somaiya.edu", fh.read())
 
 
 if __name__ == "__main__":

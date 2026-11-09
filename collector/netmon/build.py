@@ -183,6 +183,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
              "status": "ok" if r["ok"] else "failed", "error": r.get("error"), "warnings": r.get("warnings", [])[:10],
              "cpu": r.get("cpu"), "poe": None, "ports": None, "errDelta": None, "flags": [], "neighbors": [],
              "commands": r.get("commands", [])[:80]}
+        if r.get("refreshedAt"):  # re-read on its own from the dashboard after the full run
+            d.update(refreshedAt=r["refreshedAt"], refreshedBy=r.get("refreshedBy", ""))
         if not r["ok"]:
             d["flags"].append("ssh-failed")
             finding("warning", "ssh-failed", f"SSH collection failed: {r.get('error')}", ip)

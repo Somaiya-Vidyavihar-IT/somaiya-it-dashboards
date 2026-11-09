@@ -1,3 +1,4 @@
+import copy
 import os
 import tempfile
 import unittest
@@ -139,6 +140,89 @@ class FullRunOrchestration(unittest.TestCase):
             self.assertEqual(run.full_run(cfg), 0)
         self.assertEqual(used["10.0.0.2"], "cisco_s300")
         self.assertEqual([c.args[0] for c in detect.call_args_list], ["10.0.0.1"], "only the unhinted switch is detected")
+
+    def _full_run(self):
+        reachable = lambda ips, *a, **k: {ip: (1.0 if ip in self.records and ip != "10.0.1.3" or ip == "10.0.0.5" else None)
+                                          for ip in ips}
+        with mock.patch("netmon.scan.probe", side_effect=reachable), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.creds.get", return_value=("nms", "p")), \
+                mock.patch("netmon.devices.detect_platform", side_effect=lambda ip, *a: self.records[ip]["platform"]), \
+                mock.patch("netmon.devices.collect", side_effect=lambda ip, *a, **k: copy.deepcopy(self.records[ip])), \
+                mock.patch("netmon.wlc.collect", return_value=copy.deepcopy(WLC[0])):
+            self.assertEqual(run.full_run(self.cfg), 0)
+        return Store(self.tmp.name)
+
+    def _refresh(self, ip, result, sets=(("set1", "u", "p"),)):
+        logins = []
+
+        def collect(ip_, platform, *a, **k):
+            logins.append(ip_)
+            return copy.deepcopy(result)
+        with mock.patch("netmon.creds.switch_sets", return_value=list(sets)), \
+                mock.patch("netmon.devices.detect_platform", side_effect=AssertionError("platform is already known")), \
+                mock.patch("netmon.devices.collect", side_effect=collect), \
+                mock.patch("netmon.wlc.collect", side_effect=AssertionError("WLCs are not re-read")), \
+                mock.patch("netmon.scan.probe", side_effect=AssertionError("no sweep")):
+            code = run.refresh_switch(self.cfg, ip, "net@somaiya.edu")
+        return code, logins
+
+    def test_refresh_one_switch_rebuilds_the_snapshot_around_it(self):
+        store = self._full_run()
+        before = store.read("latest.json")
+        fresh = dict(copy.deepcopy(self.records["10.0.1.2"]), cpu=97)
+        code, logins = self._refresh("10.0.1.2", fresh)
+        self.assertEqual(code, 0)
+        self.assertEqual(logins, ["10.0.1.2"], "only that switch is logged in to")
+        latest = store.read("latest.json")
+        dev = next(d for d in latest["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual(dev["cpu"], 97)
+        self.assertIn("cpu", dev["flags"])
+        self.assertEqual(dev["refreshedBy"], "net@somaiya.edu")
+        self.assertEqual(latest["generatedAt"], before["generatedAt"], "still dated by its full run")
+        self.assertEqual(latest["refreshedAt"], dev["refreshedAt"])
+        self.assertEqual(latest["summary"]["cpuHigh"], before["summary"]["cpuHigh"] + 1)
+        for key in ("switches", "collected", "links", "aps"):
+            self.assertEqual(latest["summary"][key], before["summary"][key], key)
+        self.assertNotIn("refreshedAt", next(d for d in latest["devices"] if d["ip"] == "10.0.0.1"))
+        status = store.read("refresh-status.json")
+        self.assertEqual((status["state"], status["ok"], status["ip"]), ("done", True, "10.0.1.2"))
+        self.assertEqual(status["snapshotRefreshedAt"], latest["refreshedAt"])
+        self.assertFalse(store.running("refresh.lock"))
+        self.assertTrue(os.path.exists(store.path("topology-latest.dot")))
+        # A second refresh builds on the first (the refreshed record was saved).
+        self.assertEqual(self._refresh("10.0.0.1", self.records["10.0.0.1"])[0], 0)
+        self.assertEqual(next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")["cpu"], 97)
+
+    def test_reconnect_that_still_fails_is_recorded(self):
+        store = self._full_run()
+        failed = {"ip": "10.0.1.2", "ok": False, "error": "SSH authentication failed", "platform": "cisco_s300",
+                  "neighbors": [], "ports": [], "warnings": []}
+        code, logins = self._refresh("10.0.1.2", failed, sets=(("set1", "u", "p"), ("set2", "u2", "p2")))
+        self.assertEqual(code, 1)
+        self.assertEqual(logins, ["10.0.1.2", "10.0.1.2"], "every credential set is tried again")
+        dev = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual(dev["status"], "failed")
+        self.assertEqual(dev["error"], "SSH authentication failed with all 2 credential sets")
+        status = store.read("refresh-status.json")
+        self.assertEqual((status["state"], status["ok"]), ("done", False))
+        self.assertNotIn("10.0.1.2", store.read("state", "credentials.json"))
+
+    def test_refresh_refusals(self):
+        store = Store(self.tmp.name)
+        self.assertEqual(self._refresh("10.0.1.2", None)[0], 1)
+        self.assertIn("one full discovery run", store.read("refresh-status.json")["error"])
+        self._full_run()
+        self.assertEqual(self._refresh("10.0.9.9", None), (1, []))
+        self.assertIn("not a switch from the last full discovery run", store.read("refresh-status.json")["error"])
+        self.assertTrue(store.acquire({"trigger": "scheduled"}))
+        self.assertEqual(self._refresh("10.0.1.2", None), (1, []))
+        self.assertIn("full discovery run is in progress", store.read("refresh-status.json")["error"])
+        store.release()
+        self.assertTrue(store.acquire({"ip": "10.0.0.1"}, "refresh.lock"))
+        self.assertEqual(self._refresh("10.0.1.2", None), (2, []), "one refresh at a time")
+        self.assertTrue(store.running("refresh.lock"), "the other refresh keeps its lock")
+        self.assertFalse(store.running(), "a refresh never holds the full-run lock")
 
     def test_second_run_refused_while_locked(self):
         store = Store(self.tmp.name)

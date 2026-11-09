@@ -2,6 +2,7 @@
 
   python -m netmon [--config PATH] run [--trigger scheduled|manual] [--by EMAIL]
   python -m netmon [--config PATH] reach
+  python -m netmon [--config PATH] refresh --ip 10.0.0.1 [--by EMAIL]
   python -m netmon [--config PATH] serve [--dev-http]
   python -m netmon [--config PATH] capture --ip 10.0.0.1 [--platform auto|cisco_ios|cisco_nxos|cisco_s300] | --wlc 10.0.0.5
   python -m netmon [--config PATH] set-password switch --set NAME | wlc
@@ -26,6 +27,10 @@ def main(argv=None):
     r.add_argument("--trigger", default="scheduled", choices=["scheduled", "manual"])
     r.add_argument("--by", default="")
     sub.add_parser("reach", help="15-minute TCP/22 reachability check")
+    f = sub.add_parser("refresh", help="re-read one switch from the last full run and rebuild the snapshot")
+    f.add_argument("--ip", required=True)
+    f.add_argument("--by", default="")
+    f.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
     s = sub.add_parser("serve", help="HTTPS API for the hub page")
     s.add_argument("--dev-http", action="store_true", help="local testing only: plain HTTP on 127.0.0.1")
     c = sub.add_parser("capture", help="save raw read-only command output from one device for parser checks")
@@ -64,6 +69,9 @@ def main(argv=None):
     if args.cmd == "run":
         from .run import full_run
         return full_run(cfg, args.trigger, args.by)
+    if args.cmd == "refresh":
+        from .run import refresh_switch
+        return refresh_switch(cfg, args.ip, args.by, locked=args.locked)
     if args.cmd == "reach":
         from .run import reach_run
         return reach_run(cfg)

@@ -31,7 +31,7 @@ function harness(apiBase,routes){
  const calls=[];let callback,grant=true;
  const oauth={initTokenClient(opts){assert.ok(opts.scope.includes('spreadsheets.readonly')&&opts.scope.includes('userinfo.email'));callback=opts.callback;return {requestAccessToken(){}}},hasGrantedAllScopes(){return grant}};
  const window={location:{origin:'http://127.0.0.1:8765'},SOMAIYA_CONFIG:{googleClientId:'fixture.apps.googleusercontent.com',netmonApiBase:apiBase},google:{accounts:{oauth2:oauth}},addEventListener(){}};
- const fetch=async(url,opts={})=>{calls.push({url,method:opts.method||'GET',auth:opts.headers?.Authorization});
+ const fetch=async(url,opts={})=>{calls.push({url,method:opts.method||'GET',auth:opts.headers?.Authorization,body:opts.body,type:opts.headers?.['Content-Type']});
   if(url.includes('userinfo'))return {ok:true,json:async()=>({email:'net@somaiya.edu'})};
   const route=routes(url.replace(apiBase,''),opts.method||'GET',opts.headers?.Authorization);
   if(route instanceof Error)throw route;
@@ -65,6 +65,29 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  vm.runInContext("openDevice('10.0.0.1')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'),'Older snapshots without a command list say so');
  vm.runInContext("openDevice('10.0.1.3')",h.ctx);assert.ok(h.el('detail-body').innerHTML.includes('Listed after the next full run'));
  await vm.runInContext('runNow()',h.ctx);assert.ok(h.calls.some(c=>c.url===API+'/api/v1/run'&&c.method==='POST'),'Run now posts to the API');
+ // Refresh / reconnect one switch from its details dialog.
+ {const rs={run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt,refresh:{},refreshing:false};
+  const at='2026-11-05T04:00:00Z',refreshed={...snapshot,refreshedAt:at,devices:snapshot.devices.map(d=>d.ip==='10.0.1.3'?{...d,hostname:'asw-03',status:'ok',error:null,flags:[],refreshedAt:at,refreshedBy:'net@somaiya.edu'}:d)};
+  let current=snapshot,refreshReply={status:202,body:{started:true}};
+  const r=harness(API,(p,m)=>p==='/api/v1/status'?{status:200,body:{...rs}}:p==='/api/v1/snapshot'?{status:200,body:current}:p==='/api/v1/refresh'&&m==='POST'?refreshReply:team(p,m));await r.connect();
+  vm.runInContext("openDevice('10.0.0.1')",r.ctx);assert.equal(r.el('refresh-switch').hidden,false,'Team members can refresh a switch');assert.equal(r.el('refresh-switch').textContent,'Refresh switch');
+  vm.runInContext("openDevice('10.0.1.3')",r.ctx);assert.equal(r.el('refresh-switch').textContent,'Reconnect','An SSH-failed switch offers Reconnect');assert.equal(r.el('refresh-switch').disabled,false);
+  refreshReply={status:409,body:{error:'10.0.0.1 is being refreshed. Try again when it finishes (usually under a minute).'}};
+  await vm.runInContext('refreshSwitch()',r.ctx);assert.ok(r.el('toast').textContent.includes('is being refreshed'),'API refusals are shown');
+  refreshReply={status:202,body:{started:true}};rs.refreshing=true;rs.refresh={state:'running',ip:'10.0.1.3',by:'net@somaiya.edu'};
+  await vm.runInContext('refreshSwitch()',r.ctx);
+  const post=r.calls.filter(c=>c.url===API+'/api/v1/refresh').pop();assert.equal(post.method,'POST');assert.equal(post.body,'{"ip":"10.0.1.3"}');assert.equal(post.type,'application/json');assert.equal(post.auth,'Bearer fixture-token');
+  assert.equal(r.el('refresh-switch').textContent,'Refreshing…');assert.equal(r.el('refresh-switch').disabled,true);assert.ok(r.el('refresh-note').textContent.startsWith('Refreshing: logging in to this switch again'));
+  vm.runInContext("openDevice('10.0.0.1')",r.ctx);assert.equal(r.el('refresh-switch').disabled,true,'One refresh at a time');assert.ok(r.el('refresh-note').textContent.includes('10.0.1.3 is being refreshed'));
+  vm.runInContext("openDevice('10.0.1.3')",r.ctx);
+  const snaps=()=>r.calls.filter(c=>c.url===API+'/api/v1/snapshot').length,before=snaps();
+  rs.refreshing=false;rs.refresh={state:'done',ip:'10.0.1.3',by:'net@somaiya.edu',ok:true,hostname:'asw-03',finishedAt:'2026-11-05T04:00:02Z',snapshotRefreshedAt:at};current=refreshed;
+  await vm.runInContext('loadAll()',r.ctx);assert.equal(snaps(),before+1,'A finished refresh reloads the snapshot');
+  assert.equal(r.el('detail-title').textContent,'asw-03','The open dialog shows the refreshed switch');assert.ok(r.el('detail-body').innerHTML.includes('Last refreshed'));
+  assert.equal(r.el('refresh-switch').textContent,'Refresh switch');assert.equal(r.el('refresh-switch').disabled,false);
+  assert.ok(r.el('refresh-note').textContent.startsWith('Refreshed '));assert.equal(r.el('toast').textContent,'asw-03 refreshed.');
+  assert.ok(r.el('data-note').textContent.includes('Last single-switch refresh'));
+  await vm.runInContext('loadAll()',r.ctx);assert.equal(snaps(),before+1,'No reload once the refreshed snapshot is shown');}
  // Topology diagram: the API's DOT file is laid out by Viz.js (stubbed here) and active SVG content is removed.
  {const removed=[],script={remove(){removed.push('script')}},title={textContent:'10.0.0.1'};
   const node={attributes:[{name:'xlink:href'},{name:'class'}],dataset:{},removeAttribute(n){removed.push(n)},querySelector:s=>s==='title'?title:null};
@@ -101,5 +124,5 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
- console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
+ console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, single-switch refresh, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
 })().catch(e=>{console.error(e);process.exitCode=1});

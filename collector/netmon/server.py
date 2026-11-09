@@ -6,6 +6,7 @@ allowlist. Tokens are never logged or stored; only a hash is cached for at most 
 """
 import gzip
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -198,7 +199,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/status":
             reach = store.read("reachability.json", default={}) or {}
             return self._send(200, {"run": store.read("run-status.json", default={}) or {},
-                                    "running": store.running(), "reachabilityAt": reach.get("checkedAt")})
+                                    "running": store.running(), "reachabilityAt": reach.get("checkedAt"),
+                                    "refresh": store.read("refresh-status.json", default={}) or {},
+                                    "refreshing": store.running("refresh.lock")})
         if path == "/api/v1/snapshot":
             return self._file("latest.json", "application/json")
         if path == "/api/v1/reachability":
@@ -212,6 +215,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path.rstrip("/")
+        if path == "/api/v1/refresh":
+            return self._refresh()
         if path != "/api/v1/run":
             return self._error(404, "Not found")
         email = self._auth()
@@ -224,10 +229,52 @@ class Handler(BaseHTTPRequestHandler):
         self._send(202, {"started": True})
 
 
+    def _refresh(self):
+        """Re-read one switch from the last full run (dashboard: Refresh switch / Reconnect)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 < length <= 1024:
+            self.close_connection = True  # unread body
+            return self._error(400, 'Send {"ip": "<switch management IP>"}.')
+        body = self.rfile.read(length)
+        email = self._auth()
+        if not email:
+            return
+        try:
+            ip = str(ipaddress.IPv4Address(str(json.loads(body).get("ip", ""))))
+        except (ValueError, AttributeError, TypeError):
+            return self._error(400, "That is not a valid switch IP address.")
+        store = self.server.store
+        if store.running():
+            return self._error(409, "A full discovery run is in progress; it reads every switch, including this one.")
+        if not os.path.exists(store.path("state", "last-run.json")):
+            return self._error(409, "Switch refresh needs one full discovery run with the updated collector first. "
+                                    "Use Run discovery now.")
+        if ip not in self.server.known_switches():
+            return self._error(404, "This address is not a switch from the last full discovery run.")
+        if not store.acquire({"ip": ip, "by": email}, "refresh.lock"):
+            busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"
+            return self._error(409, f"{busy} is being refreshed. Try again when it finishes (usually under a minute).")
+        store.write({"state": "running", "ip": ip, "by": email, "startedAt": None, "finishedAt": None, "ok": None,
+                     "error": None}, "refresh-status.json")
+        try:
+            self.server.start_refresh(email, ip)
+        except Exception:
+            store.release("refresh.lock")
+            store.write({"state": "failed", "ip": ip, "by": email, "ok": False,
+                         "error": "The collector could not be started on the server."}, "refresh-status.json")
+            log.exception("Could not start the refresh of %s", ip)
+            return self._error(500, "The collector could not be started on the server.")
+        store.audit(f"refresh-request ip={ip} by={email} from={self.client_address[0]}")
+        self._send(202, {"started": True, "ip": ip})
+
+
 class NetmonServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None):
+    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None, start_refresh=None):
         srv = cfg["server"]
         super().__init__((srv["host"], srv["port"]), Handler)
         self.ssl_ctx = ssl_ctx
@@ -236,6 +283,18 @@ class NetmonServer(ThreadingHTTPServer):
         self.files = FileCache()
         self.verifier = verifier or Verifier(srv["google_client_id"], srv["allowed_domains"], srv["network_team"])
         self.start_run = start_run or self._spawn_run
+        self.start_refresh = start_refresh or self._spawn_refresh
+        self._known = (None, frozenset())
+
+    def known_switches(self):
+        """Switch IPs in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
+        cached = self.files.get(self.store.path("latest.json"))
+        if cached is None:
+            return frozenset()
+        raw = cached[0]
+        if self._known[0] is not raw:
+            self._known = (raw, frozenset(d.get("ip") for d in json.loads(raw).get("devices", [])))
+        return self._known[1]
 
     def finish_request(self, request, client_address):
         # TLS handshake in the worker thread so a slow client cannot stall accept().
@@ -255,9 +314,16 @@ class NetmonServer(ThreadingHTTPServer):
                 pass
 
     def _spawn_run(self, email):
+        self._spawn(["run", "--trigger", "manual", "--by", email], "manual-run.log")
+
+    def _spawn_refresh(self, email, ip):
+        # --locked: this request already holds refresh.lock; the child releases it when done.
+        self._spawn(["refresh", "--ip", ip, "--by", email, "--locked"], "refresh.log")
+
+    def _spawn(self, args, log_name):
         python = self.cfg["server"]["python"] or sys.executable
-        cmd = [python, "-m", "netmon", "--config", self.cfg["_path"], "run", "--trigger", "manual", "--by", email]
-        logfile = open(self.store.path("manual-run.log"), "ab")
+        cmd = [python, "-m", "netmon", "--config", self.cfg["_path"], *args]
+        logfile = open(self.store.path(log_name), "ab")
         flags = 0
         if os.name == "nt":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
