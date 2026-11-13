@@ -1,7 +1,8 @@
 """Credentials come from Windows Credential Manager (keyring) or environment variables, never files.
 
 Switches can use several credential sets (e.g. different TACACS+/local accounts per era of kit);
-each set is stored under "<service>/switch:<set name>". The WLC account is "<service>/wlc".
+each set is stored under "<service>/switch:<set name>". The WLC account is "<service>/wlc" and the
+read-only SolarWinds account (CCTV dashboard) is "<service>/solarwinds".
 """
 import os
 
@@ -12,11 +13,19 @@ class CredentialError(RuntimeError):
 
 def _service(cfg, kind, set_name=None):
     base = cfg["collector"]["credential_service"]
-    return f"{base}/switch:{set_name}" if kind == "switch" else f"{base}/wlc"
+    if kind == "switch":
+        return f"{base}/switch:{set_name}"
+    return f"{base}/{kind}"  # wlc, solarwinds
 
 
 def _env_name(kind, set_name=None):
-    return f"NETMON_SWITCH_{set_name.upper().replace('-', '_')}_PASSWORD" if kind == "switch" else "NETMON_WLC_PASSWORD"
+    if kind == "switch":
+        return f"NETMON_SWITCH_{set_name.upper().replace('-', '_')}_PASSWORD"
+    return f"NETMON_{kind.upper()}_PASSWORD"  # NETMON_WLC_PASSWORD, NETMON_SOLARWINDS_PASSWORD
+
+
+def _username(cfg, kind):
+    return (cfg["cctv"]["solarwinds_username"] if kind == "solarwinds" else cfg["collector"].get("wlc_username")) or ""
 
 
 def _lookup(cfg, kind, username, set_name=None):
@@ -43,12 +52,12 @@ def switch_sets(cfg):
 
 
 def get(cfg, kind="wlc"):
-    """WLC credentials as (username, password)."""
-    col = cfg["collector"]
-    username = col.get("wlc_username") or ""
-    password = _lookup(cfg, "wlc", username) if username else ""
+    """WLC or SolarWinds credentials as (username, password)."""
+    username = _username(cfg, kind)
+    password = _lookup(cfg, kind, username) if username else ""
     if not username or not password:
-        raise CredentialError("No WLC credentials. Set collector.wlc_username and run: netmon set-password wlc")
+        where = "cctv.solarwinds_username" if kind == "solarwinds" else "collector.wlc_username"
+        raise CredentialError(f"No {kind} credentials. Set {where} and run: netmon set-password {kind}")
     return username, password
 
 
@@ -62,9 +71,10 @@ def store(cfg, kind, password, set_name=None):
             raise CredentialError(f"Unknown credential set {set_name!r}. Configured sets: {names}")
         username = match[0]["username"]
     else:
-        username = col.get("wlc_username") or ""
+        username = _username(cfg, kind)
         if not username:
-            raise CredentialError("Set collector.wlc_username in config.toml first")
+            where = "cctv.solarwinds_username" if kind == "solarwinds" else "collector.wlc_username"
+            raise CredentialError(f"Set {where} in config.toml first")
     keyring.set_password(_service(cfg, kind, set_name), username, password)
     return username
 
@@ -77,4 +87,7 @@ def status(cfg):
     if cfg["wlc"]["hosts"]:
         user = cfg["collector"].get("wlc_username") or ""
         rows.append(("wlc", user, bool(user and _lookup(cfg, "wlc", user))))
+    if cfg["cctv"]["enabled"] and cfg["cctv"]["source"] == "solarwinds":
+        user = cfg["cctv"]["solarwinds_username"]
+        rows.append(("solarwinds (cctv)", user, bool(user and _lookup(cfg, "solarwinds", user))))
     return rows

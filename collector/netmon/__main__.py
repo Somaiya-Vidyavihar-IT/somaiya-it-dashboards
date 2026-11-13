@@ -5,7 +5,8 @@
   python -m netmon [--config PATH] refresh --ip 10.0.0.1 [--by EMAIL]
   python -m netmon [--config PATH] serve [--dev-http]
   python -m netmon [--config PATH] capture --ip 10.0.0.1 [--platform auto|cisco_ios|cisco_nxos|cisco_s300] | --wlc 10.0.0.5
-  python -m netmon [--config PATH] set-password switch --set NAME | wlc
+  python -m netmon [--config PATH] cctv
+  python -m netmon [--config PATH] set-password switch --set NAME | wlc | solarwinds
   python -m netmon [--config PATH] check-config
   python -m netmon [--config PATH] make-cert --host netmon.somaiya.edu [--ip VM_IP]
   python -m netmon [--config PATH] import-pfx wildcard.pfx
@@ -31,6 +32,7 @@ def main(argv=None):
     f.add_argument("--ip", required=True)
     f.add_argument("--by", default="")
     f.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
+    sub.add_parser("cctv", help="read cameras and NVRs from SolarWinds once (the API does this every few minutes)")
     s = sub.add_parser("serve", help="HTTPS API for the hub page")
     s.add_argument("--dev-http", action="store_true", help="local testing only: plain HTTP on 127.0.0.1")
     c = sub.add_parser("capture", help="save raw read-only command output from one device for parser checks")
@@ -40,7 +42,7 @@ def main(argv=None):
     c.add_argument("--platform", default="auto", choices=sorted(config_mod.PLATFORMS))
     c.add_argument("--set", dest="cred_set", default="", help="switch credential set to use (default: try each)")
     p = sub.add_parser("set-password", help="store a password in Windows Credential Manager")
-    p.add_argument("kind", choices=["switch", "wlc"])
+    p.add_argument("kind", choices=["switch", "wlc", "solarwinds"])
     p.add_argument("--set", dest="cred_set", default="", help="switch credential set name from config.toml")
     sub.add_parser("check-config", help="validate config.toml and credentials")
     x = sub.add_parser("import-pfx", help="convert the wildcard certificate (.pfx) to the PEM files in config.toml")
@@ -75,6 +77,8 @@ def main(argv=None):
     if args.cmd == "reach":
         from .run import reach_run
         return reach_run(cfg)
+    if args.cmd == "cctv":
+        return _cctv(cfg)
     if args.cmd == "serve":
         from .server import serve
         serve(cfg, dev_http=args.dev_http)
@@ -86,7 +90,7 @@ def main(argv=None):
         if args.kind == "switch" and not args.cred_set:
             names = ", ".join(s["name"] for s in cfg["collector"]["switch_credential_sets"])
             raise SystemExit(f"Add --set NAME. Configured switch credential sets: {names}")
-        label = f"switch set '{args.cred_set}'" if args.kind == "switch" else "WLC"
+        label = {"switch": f"switch set '{args.cred_set}'", "wlc": "WLC", "solarwinds": "SolarWinds (read-only)"}[args.kind]
         pw = getpass.getpass(f"Password for {label} (typing is hidden): ")
         if not pw or pw != getpass.getpass("Type it again: "):
             raise SystemExit("Passwords were empty or did not match; nothing stored.")
@@ -109,7 +113,53 @@ def main(argv=None):
             print("  WARNING: collector.seeds is empty; with sweep = false nothing will be discovered.")
         for f in (cfg["server"]["cert_file"], cfg["server"]["key_file"]):
             print(f"  {'found  ' if f and os.path.exists(f) else 'MISSING'} {f or '(not set)'}")
+        cc = cfg["cctv"]
+        if cc["enabled"] and cc["source"] == "sheet":
+            sa = cc["service_account_file"]
+            print(f"  CCTV: sheet {cc['sheet_id'][:12]}..., tabs {', '.join(cc['sheet_tabs'])}, {cc['check']} check, "
+                  f"{len(cc['viewers'])} viewer emails, every {cc['poll_minutes']} min")
+            print(f"  {'found  ' if os.path.exists(sa) else 'MISSING'} {sa} (service account key for the CCTV sheet)")
+            missing += not os.path.exists(sa)
+        elif cc["enabled"]:
+            print(f"  CCTV: SolarWinds {cc['solarwinds_host']}:{cc['solarwinds_port']}, {len(cc['viewers'])} viewer emails, "
+                  f"{len(cc['camera_ranges_nets'])} camera ranges, every {cc['poll_minutes']} min")
+        else:
+            print("  CCTV: off (set cctv.sheet_id with source = \"sheet\", or cctv.solarwinds_host)")
+        if cc["enabled"] and not cc["viewers"]:
+            print("  WARNING: cctv.viewers is empty; nobody can open the CCTV dashboard.")
         return 1 if missing else 0
+
+
+def _cctv(cfg):
+    from . import cctv
+    from .store import Store
+    if not cfg["cctv"]["enabled"]:
+        raise SystemExit("CCTV is off: set cctv.sheet_id (source = \"sheet\") or cctv.solarwinds_host in config.toml first")
+    store = Store(cfg["collector"]["data_dir"])
+    st = cctv.poll_once(cfg, store, by="command line")
+    if not st["ok"]:
+        print(f"CCTV read failed: {st['error']}")
+        return 1
+    snap = store.read("cctv.json", default={}) or {}
+    s = snap.get("summary", {})
+    cam, nvr = s.get("cameras", {}), s.get("nvrs", {})
+    if snap.get("source") == "sheet":
+        print(f"Checked {snap.get('nodesRead')} devices from the CCTV sheet ({', '.join(cfg['cctv']['sheet_tabs'])}) "
+              f"by {cfg['cctv']['check']} in {st.get('seconds')} s.")
+        if snap.get("sheetError"):
+            print(f"  WARNING: sheet read failed, using the copy from {snap.get('sheetReadAt')}: {snap['sheetError']}")
+        print(f"  Sheet problems (bad/duplicate IPs, unknown types): {s.get('sheetProblems')}")
+    else:
+        print(f"Read {snap.get('nodesRead')} SolarWinds nodes in {st.get('seconds')} s.")
+    print(f"  Cameras: {cam.get('total')} ({cam.get('up')} up, {cam.get('warning')} warning, {cam.get('down')} down, "
+          f"{cam.get('unmonitored')} not monitored)")
+    print(f"  NVRs:    {nvr.get('total')} ({nvr.get('up')} up, {nvr.get('warning')} warning, {nvr.get('down')} down)")
+    print(f"  Down more than {cfg['cctv']['escalate_hours']} h: {s.get('escalated')}")
+    if snap.get("source") != "sheet" and cfg["cctv"]["ipam_ranges_nets"]:
+        print(f"  Live in IPAM CCTV ranges but not in SolarWinds: {s.get('notInSolarWinds')}"
+              + (f" (IPAM check failed: {snap.get('notInSolarWindsError')})" if snap.get("notInSolarWindsError") else ""))
+    print(f"Saved {store.path('cctv.json')}")
+    return 0
 
 
 def _make_cert(cfg, host, ips):

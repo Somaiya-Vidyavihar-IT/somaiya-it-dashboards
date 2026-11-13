@@ -92,7 +92,7 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/v1/snapshot", "outsider")[0].status, 403)
         resp, body = self.req("GET", "/api/v1/me", "good")
         self.assertEqual(resp.status, 200)
-        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 2})
+        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 3})
         self.assertEqual(resp.getheader("Access-Control-Allow-Origin"), ORIGIN)
         self.assertEqual(resp.getheader("Cache-Control"), "no-store")
 
