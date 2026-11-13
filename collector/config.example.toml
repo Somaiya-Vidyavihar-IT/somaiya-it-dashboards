@@ -73,6 +73,23 @@ tcp_ports = [80, 554]                     # used when check = "tcp"
 check_timeout_ms = 1000
 check_tries = 2                           # down only after this many failed attempts in one round
 check_workers = 64
+# Emails (sheet mode). The switch (A1 "Emails", B1 Off / Test / On) and the recipients per site
+# (Institute Name | IT SPOC | CC | Escalation, one address per cell) are in this tab of the same sheet.
+email_config_tab = "Email Config"
+mail_from = "itsurveillance@somaiya.edu"
+mail_from_name = "Somaiya CCTV Monitoring"
+smtp_host = "smtp.gmail.com"              # or "smtp-relay.gmail.com" (Workspace relay) or a campus relay
+smtp_port = 587
+smtp_starttls = true
+smtp_username = ""                        # e.g. "itsurveillance@somaiya.edu" with an app password
+                                          # (netmon set-password smtp); blank = relay without login
+email_team = []                           # copied on urgent mails, gets Test mails; blank = server.network_team
+nvr_down_checks = 2                       # NVR down email after this many failed rounds in a row
+mass_down_min = 5                         # "cameras down at once": this many cameras ...
+mass_down_fraction = 0.5                  # ... or this share of a site's cameras in one round
+digest_time = "09:00"                     # daily site report, IST
+escalate_again_days = 7                   # second escalation (the first is escalate_hours)
+urgent_per_site_hour = 4                  # more urgent mails per site in an hour wait for the daily report
 # --- source = "solarwinds" only ---
 solarwinds_host = ""                      # e.g. "<SOLARWINDS_MAIN_POLLER>"
 solarwinds_port = 17774

@@ -106,6 +106,8 @@ const viewer=(p,m)=>p==='/api/v1/cctv/me'?{status:200,body:{email:'guard@somaiya
    dev({kind:'camera',matchedBy:'sheet',name:'Lab - Lobby <i>x</i>',ip:'192.0.2.11',institute:'Lab',tab:'Lab',row:3,nvr:'Lab - NVR (192.0.2.10)',status:'down',downSince:'2026-11-10T06:00:00Z',downSinceExact:true,downSinceSource:'observed',downHours:72,escalated:true}),
    dev({kind:'camera',matchedBy:'sheet',name:'Lab - Gate',ip:'192.0.2.12',institute:'Lab',tab:'Lab',row:4,nvr:'Lab - NVR (192.0.2.10)'})],
   sheetProblems:[{tab:'Lab',row:9,issue:'IP missing or not valid',text:'10.1. <b>1</b>.76'}],notInSolarWinds:[],
+  email:{mode:'test',switch:'Test',mailFrom:'itsurveillance@somaiya.edu',digestTime:'09:00',lastSentAt:'2026-11-13T05:00:00Z',sentToday:2,waiting:1,lastError:'SMTPAuthenticationError: bad <i>password</i>',
+   recipients:{Lab:{to:['spoc@somaiya.edu'],cc:['partner<b>@example.com'],escalation:[]}}},
   rules:{source:'sheet',sheetTabs:['Lab'],check:'ping',tcpPorts:[80,554],checkTries:2,escalateHours:48,pollMinutes:5,sheetMinutes:15,ipamRanges:[]}};
  h=harness(API,(p,m)=>p==='/api/v1/cctv/snapshot'?{status:200,body:sheetSnap}:viewer(p,m));await h.connect();
  assert.equal(h.el('eyebrow').textContent,'CAMPUS CCTV · FROM THE CCTV SHEET');
@@ -118,6 +120,9 @@ const viewer=(p,m)=>p==='/api/v1/cctv/me'?{status:200,body:{email:'guard@somaiya
  assert.ok(h.el('stats').innerHTML.includes('SHEET PROBLEMS')&&!h.el('stats').innerHTML.includes('NOT IN SOLARWINDS'));
  assert.ok(h.el('esc-rows').innerHTML.includes('3 d 0 h')&&!h.el('esc-rows').innerHTML.includes('≥'),'Observed outages are exact');
  assert.ok(h.el('rules').innerHTML.includes('ping (ICMP)'));assert.equal(h.el('poll-now').textContent,'Check now');
+ assert.ok(h.el('email-note').textContent.startsWith('Test: emails go only to the IT Network Team'),'Email switch state is shown');
+ assert.ok(h.el('email-note').textContent.includes('1 waiting to be sent')&&h.el('email-note').textContent.includes('last error: SMTPAuthenticationError'));
+ assert.ok(h.el('email-rows').innerHTML.includes('partner&lt;b&gt;@example.com')&&h.el('email-rows').innerHTML.includes('spoc@somaiya.edu'),'Recipients are listed, escaped');
  h.blobs.length=0;vm.runInContext("downloadCsv('camera')",h.ctx);assert.ok(h.blobs[0].includes('Sheet tab')&&h.blobs[0].includes('Lab - NVR (192.0.2.10)'));
 
  console.log('Passed CCTV page: CCTV routes only, escaping, escalations, IPAM gap, filters, safe CSV, Read now, access denied, old server, unreachable, expiry, not configured, sheet mode.');

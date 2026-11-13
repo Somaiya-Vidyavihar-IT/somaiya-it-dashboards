@@ -24,8 +24,13 @@ def _env_name(kind, set_name=None):
     return f"NETMON_{kind.upper()}_PASSWORD"  # NETMON_WLC_PASSWORD, NETMON_SOLARWINDS_PASSWORD
 
 
+USER_SETTING = {"solarwinds": ("cctv", "solarwinds_username"), "smtp": ("cctv", "smtp_username"),
+                "wlc": ("collector", "wlc_username")}
+
+
 def _username(cfg, kind):
-    return (cfg["cctv"]["solarwinds_username"] if kind == "solarwinds" else cfg["collector"].get("wlc_username")) or ""
+    section, key = USER_SETTING.get(kind, USER_SETTING["wlc"])
+    return cfg[section].get(key) or ""
 
 
 def _lookup(cfg, kind, username, set_name=None):
@@ -56,7 +61,7 @@ def get(cfg, kind="wlc"):
     username = _username(cfg, kind)
     password = _lookup(cfg, kind, username) if username else ""
     if not username or not password:
-        where = "cctv.solarwinds_username" if kind == "solarwinds" else "collector.wlc_username"
+        where = ".".join(USER_SETTING.get(kind, USER_SETTING["wlc"]))
         raise CredentialError(f"No {kind} credentials. Set {where} and run: netmon set-password {kind}")
     return username, password
 
@@ -73,7 +78,7 @@ def store(cfg, kind, password, set_name=None):
     else:
         username = _username(cfg, kind)
         if not username:
-            where = "cctv.solarwinds_username" if kind == "solarwinds" else "collector.wlc_username"
+            where = ".".join(USER_SETTING.get(kind, USER_SETTING["wlc"]))
             raise CredentialError(f"Set {where} in config.toml first")
     keyring.set_password(_service(cfg, kind, set_name), username, password)
     return username
@@ -90,4 +95,7 @@ def status(cfg):
     if cfg["cctv"]["enabled"] and cfg["cctv"]["source"] == "solarwinds":
         user = cfg["cctv"]["solarwinds_username"]
         rows.append(("solarwinds (cctv)", user, bool(user and _lookup(cfg, "solarwinds", user))))
+    if cfg["cctv"]["enabled"] and cfg["cctv"]["source"] == "sheet" and cfg["cctv"].get("smtp_username"):
+        user = cfg["cctv"]["smtp_username"]
+        rows.append(("smtp (cctv emails)", user, bool(_lookup(cfg, "smtp", user))))
     return rows

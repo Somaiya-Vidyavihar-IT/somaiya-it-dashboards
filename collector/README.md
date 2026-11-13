@@ -87,6 +87,31 @@ The CCTV page shows cameras and NVRs up or down, the NVR inventory, and everythi
 - **Down since:** the collector's own history (`data\state\cctv-reach.json`): "observed" (exact to one round) when a device that answered earlier stops answering; "at least since" when it was already down the first time it was checked.
 - **Setup:** copy the key to `service_account_file`, set `source`, `sheet_id`, `sheet_tabs` and `viewers` in `[cctv]`, run `C:\netmon\netmon check-config` and `C:\netmon\netmon cctv`, then restart `netmon-api`.
 
+### Emails (sheet mode, `netmon/cctv_mail.py`)
+
+Sent as `mail_from` (itsurveillance@somaiya.edu). **The one switch and all recipients are in the sheet's `email_config_tab`** ("Email Config"), read separately from the camera tabs, so a missing or broken email tab never stops monitoring (emails just count as Off):
+
+```text
+A1 Emails | B1 Off / Test / On            <- the switch; anything else (blank, typo, unreadable tab) = Off
+Institute Name | IT SPOC | CC | CC | Escalation   <- header row; labels may repeat; one address per cell
+VTI            | spoc@...| cc@...| partner@... | head@...
+```
+
+`Institute Name` is the monitored tab's name. **IT SPOC** cells (any header containing "SPOC") are To, **CC**, **Vendor** or **Partner** cells Cc, **Escalation** cells are added only to escalations; `email_team` (default `server.network_team`) is copied on urgent mails and escalations. **Test** sends every mail only to `email_team`, with "[TEST]" and the would-be recipients in the text. Cells that are not one valid address, columns without a known header, duplicate sites and monitored sites without an IT SPOC are listed as sheet problems (tab "Email Config").
+
+| Email | When | To |
+|---|---|---|
+| NVR down / back up | an NVR fails `nvr_down_checks` (2) rounds in a row; back up when it answers again | site + team |
+| Cameras down at once / back up | ≥ `mass_down_min` (5) cameras, or ≥ `mass_down_fraction` (half) of a site, go down in one round; back up when ≥ 80 % answer | site + team |
+| Daily site report | at `digest_time` (09:00 IST), per site, only if something is down or changed since the last report; single camera outages are only reported here | site |
+| Escalation | once when a device passes `escalate_hours` (48 h) down, once more after `escalate_again_days` (7) | site + Escalation + team |
+| Monitoring problems | with the daily reports, if the sheet could not be re-read or has problems; and once a day after an hour of failed rounds | team |
+
+- **No floods, no repeats:** what was mailed per outage is kept in `data\state\cctv-mail.json`, so restarts never resend. Devices already down when a site is first seen or emails are first evaluated, and anything that happened while the switch was Off, never produce urgent mails; they appear in the next daily report. More than `urgent_per_site_hour` (4) urgent mails for one site in an hour are held for the daily report.
+- **Sending:** SMTP with STARTTLS to `smtp_host:smtp_port`, as `smtp_username` with its password from Credential Manager (`C:\netmon\netmon set-password smtp`, e.g. a Google app password for itsurveillance@somaiya.edu), or without login through a relay that allows this host (`smtp-relay.gmail.com`). Mails that cannot be sent wait in an outbox and are retried each round for 24 hours; the page's Connection tab shows the switch, last sent, waiting mails, the last error and the recipients per site. Switching Off drops anything waiting.
+- **Try the mail route** before turning the switch on: `C:\netmon\netmon cctv-mail-test --to you@somaiya.edu` (ignores the switch).
+- Mails are plain text: site, location, device type, NVR, IP, since when, and the dashboard link.
+
 ### SolarWinds mode (`source = "solarwinds"`)
 
 SolarWinds already polls these devices; `netmon/cctv.py` only reads its results through the SolarWinds Information Service (`https://<host>:17774/SolarWinds/InformationService/v3/Json/Query`) with a **read-only** SolarWinds account. Every statement is checked to be a SWQL `SELECT` before it is sent.
@@ -96,7 +121,7 @@ SolarWinds already polls these devices; `netmon/cctv.py` only reads its results 
 - **Not in SolarWinds:** with `ipam_ranges` set, live IPs that SolarWinds IPAM sees in those CCTV subnets but that are not SolarWinds nodes (checked at most hourly).
 - **Certificate:** SWIS usually has a self-signed certificate. Its SHA-256 fingerprint is pinned: `solarwinds_cert_sha256`, or else the one seen first (`data\state\solarwinds-cert.json`; delete it after SolarWinds renews its certificate).
 - **Setup:** fill `[cctv]` in `config.toml` (see `config.example.toml`), then as the service account `C:\netmon\netmon set-password solarwinds`, `C:\netmon\netmon cctv` (test read), and restart `netmon-api`. The collector host needs TCP 17774 to the SolarWinds main polling engine.
-**Either mode:** no alerts or emails yet (planned for phase 2), and no check that video was recorded: ping and SolarWinds only show that a device answers.
+**Either mode:** no check that video was recorded: ping and SolarWinds only show that a device answers. Emails exist only in sheet mode.
 
 ## Access control
 

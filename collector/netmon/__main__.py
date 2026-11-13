@@ -6,7 +6,8 @@
   python -m netmon [--config PATH] serve [--dev-http]
   python -m netmon [--config PATH] capture --ip 10.0.0.1 [--platform auto|cisco_ios|cisco_nxos|cisco_s300] | --wlc 10.0.0.5
   python -m netmon [--config PATH] cctv
-  python -m netmon [--config PATH] set-password switch --set NAME | wlc | solarwinds
+  python -m netmon [--config PATH] set-password switch --set NAME | wlc | solarwinds | smtp
+  python -m netmon [--config PATH] cctv-mail-test --to ADDRESS
   python -m netmon [--config PATH] check-config
   python -m netmon [--config PATH] make-cert --host netmon.somaiya.edu [--ip VM_IP]
   python -m netmon [--config PATH] import-pfx wildcard.pfx
@@ -32,7 +33,9 @@ def main(argv=None):
     f.add_argument("--ip", required=True)
     f.add_argument("--by", default="")
     f.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
-    sub.add_parser("cctv", help="read cameras and NVRs from SolarWinds once (the API does this every few minutes)")
+    sub.add_parser("cctv", help="check cameras and NVRs once (the API does this every few minutes)")
+    mt = sub.add_parser("cctv-mail-test", help="send one test email with the CCTV mail settings (ignores the switch)")
+    mt.add_argument("--to", required=True)
     s = sub.add_parser("serve", help="HTTPS API for the hub page")
     s.add_argument("--dev-http", action="store_true", help="local testing only: plain HTTP on 127.0.0.1")
     c = sub.add_parser("capture", help="save raw read-only command output from one device for parser checks")
@@ -42,7 +45,7 @@ def main(argv=None):
     c.add_argument("--platform", default="auto", choices=sorted(config_mod.PLATFORMS))
     c.add_argument("--set", dest="cred_set", default="", help="switch credential set to use (default: try each)")
     p = sub.add_parser("set-password", help="store a password in Windows Credential Manager")
-    p.add_argument("kind", choices=["switch", "wlc", "solarwinds"])
+    p.add_argument("kind", choices=["switch", "wlc", "solarwinds", "smtp"])
     p.add_argument("--set", dest="cred_set", default="", help="switch credential set name from config.toml")
     sub.add_parser("check-config", help="validate config.toml and credentials")
     x = sub.add_parser("import-pfx", help="convert the wildcard certificate (.pfx) to the PEM files in config.toml")
@@ -77,6 +80,8 @@ def main(argv=None):
     if args.cmd == "reach":
         from .run import reach_run
         return reach_run(cfg)
+    if args.cmd == "cctv-mail-test":
+        return _cctv_mail_test(cfg, args.to)
     if args.cmd == "cctv":
         return _cctv(cfg)
     if args.cmd == "serve":
@@ -90,7 +95,8 @@ def main(argv=None):
         if args.kind == "switch" and not args.cred_set:
             names = ", ".join(s["name"] for s in cfg["collector"]["switch_credential_sets"])
             raise SystemExit(f"Add --set NAME. Configured switch credential sets: {names}")
-        label = {"switch": f"switch set '{args.cred_set}'", "wlc": "WLC", "solarwinds": "SolarWinds (read-only)"}[args.kind]
+        label = {"switch": f"switch set '{args.cred_set}'", "wlc": "WLC", "solarwinds": "SolarWinds (read-only)",
+                 "smtp": f"the CCTV email account {cfg['cctv']['smtp_username']}"}[args.kind]
         pw = getpass.getpass(f"Password for {label} (typing is hidden): ")
         if not pw or pw != getpass.getpass("Type it again: "):
             raise SystemExit("Passwords were empty or did not match; nothing stored.")
@@ -119,6 +125,9 @@ def main(argv=None):
             print(f"  CCTV: sheet {cc['sheet_id'][:12]}..., tabs {', '.join(cc['sheet_tabs'])}, {cc['check']} check, "
                   f"{len(cc['viewers'])} viewer emails, every {cc['poll_minutes']} min")
             print(f"  {'found  ' if os.path.exists(sa) else 'MISSING'} {sa} (service account key for the CCTV sheet)")
+            print(f"  CCTV emails: from {cc['mail_from']} via {cc['smtp_host']}:{cc['smtp_port']} "
+                  f"({'login ' + cc['smtp_username'] if cc['smtp_username'] else 'relay, no login'}); switch and "
+                  f"recipients in the sheet tab '{cc['email_config_tab']}'; team copy: {', '.join(cc['email_team']) or 'NONE'}")
             missing += not os.path.exists(sa)
         elif cc["enabled"]:
             print(f"  CCTV: SolarWinds {cc['solarwinds_host']}:{cc['solarwinds_port']}, {len(cc['viewers'])} viewer emails, "
@@ -128,6 +137,30 @@ def main(argv=None):
         if cc["enabled"] and not cc["viewers"]:
             print("  WARNING: cctv.viewers is empty; nobody can open the CCTV dashboard.")
         return 1 if missing else 0
+
+
+def _cctv_mail_test(cfg, to):
+    from datetime import datetime, timezone
+    from .cctv_mail import EMAIL_RE, build_message, smtp_sender
+    cc = cfg["cctv"]
+    if not EMAIL_RE.fullmatch(to):
+        raise SystemExit(f"{to!r} is not one email address")
+    item = {"id": f"<cctv-test-{int(datetime.now(timezone.utc).timestamp())}@{cc['mail_from'].split('@')[-1]}>",
+            "kind": "test", "site": "", "to": [to], "cc": [], "subject": "[CCTV] Test email from the monitoring collector",
+            "body": "This is a test from the CCTV monitoring collector.\n"
+                    f"Sent via {cc['smtp_host']}:{cc['smtp_port']} as {cc['mail_from']}"
+                    + (f" (login {cc['smtp_username']})" if cc["smtp_username"] else " (relay, no login)")
+                    + ".\nIf you can read this, the mail settings work. The CCTV email switch is in the sheet's "
+                    + cc["email_config_tab"] + " tab."}
+    try:
+        smtp_sender(cfg)([build_message(cc, item)])
+    except Exception as exc:
+        print(f"Sending failed: {exc.__class__.__name__}: {exc}")
+        print("Check: smtp_host/port, outbound TCP to it, smtp_username + set-password smtp (app password), "
+              "or the relay allowing this host.")
+        return 1
+    print(f"Sent a test email to {to} from {cc['mail_from']} via {cc['smtp_host']}:{cc['smtp_port']}.")
+    return 0
 
 
 def _cctv(cfg):

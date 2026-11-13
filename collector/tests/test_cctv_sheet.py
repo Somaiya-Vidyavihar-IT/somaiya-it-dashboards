@@ -14,6 +14,7 @@ from netmon.store import Store
 
 NOW = datetime(2026, 11, 13, 6, 0, tzinfo=timezone.utc)
 SHEET_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789"
+EMAIL_ROWS = [["Emails", "Off"], [], ["Institute Name", "IT SPOC"], ["Lab", "spoc@somaiya.edu"], ["Hall", "hall@somaiya.edu"]]
 
 SIMPLE = [["Location", "Device Type", "IP"],
           ["Lab block - Dahua Non Poe", "NVR", "192.0.2.10"],
@@ -140,7 +141,8 @@ class Collect(unittest.TestCase):
         return None if ip in self.down else 3
 
     def collect(self, now):
-        return cctv_sheet.collect_sheet(self.cfg, self.store, now=now, reader=self.reader, probe=self.probe)
+        return cctv_sheet.collect_sheet(self.cfg, self.store, now=now, reader=self.reader, probe=self.probe,
+                                        email_reader=lambda: EMAIL_ROWS)
 
     def test_status_history_escalation(self):
         snap = self.collect(NOW)

@@ -350,7 +350,18 @@ def make_query(cfg, store):
     return client.query
 
 
-def poll_once(cfg, store, by="", query=None, clock=None):
+def _emails(cfg, store, snap, now, mailer=None):
+    """Email rules for this round (sheet mode). A mail problem never fails the monitoring round."""
+    from .cctv_mail import clear_failure, process
+    try:
+        clear_failure(store)
+        return process(cfg, store, snap, now=now, send=mailer)
+    except Exception as exc:
+        log.exception("CCTV email rules failed")
+        return {"mode": "error", "lastError": f"{exc.__class__.__name__}: {exc}"[:300]}
+
+
+def poll_once(cfg, store, by="", query=None, clock=None, mailer=None):
     """One poll: writes cctv.json (on success) and cctv-status.json. Returns the status dict."""
     started = (clock or (lambda: datetime.now(timezone.utc)))()
     status = {"state": "running", "startedAt": _iso(started), "finishedAt": None, "by": by, "ok": None, "error": None,
@@ -363,6 +374,7 @@ def poll_once(cfg, store, by="", query=None, clock=None):
         if cfg["cctv"]["source"] == "sheet":
             from .cctv_sheet import collect_sheet
             snap = collect_sheet(cfg, store, now=started)
+            snap["email"] = _emails(cfg, store, snap, started, mailer)
         else:
             snap = collect(cfg, query or make_query(cfg, store), store, now=started)
         store.write(snap, "cctv.json")
@@ -373,6 +385,12 @@ def poll_once(cfg, store, by="", query=None, clock=None):
             else f"{exc.__class__.__name__}: {exc}"
         log.warning("CCTV poll failed: %s", msg)
         status.update(state="failed", ok=False, error=msg[:500])
+        if cfg["cctv"]["source"] == "sheet":
+            try:
+                from .cctv_mail import on_failure
+                on_failure(cfg, store, msg, now=started, send=mailer)
+            except Exception:
+                log.exception("CCTV failure email could not be prepared")
     status.update(finishedAt=_iso(datetime.now(timezone.utc)), seconds=round(time.monotonic() - t0, 1))
     store.write(status, "cctv-status.json")
     return status

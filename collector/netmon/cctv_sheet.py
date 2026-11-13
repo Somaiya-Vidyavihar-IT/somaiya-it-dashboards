@@ -287,8 +287,20 @@ def default_reader(cfg):
     return read
 
 
-def load_sheet(cfg, store, now, reader=None):
-    """Sheet rows from cache, re-read every cctv.sheet_minutes. A failed read keeps the last good copy."""
+def default_email_reader(cfg):
+    """Rows of the Email Config tab. Read on its own, so a missing or broken email tab never stops monitoring."""
+    cc = cfg["cctv"]
+
+    def read():
+        key = load_key(cc["service_account_file"])
+        return read_tabs(cc["sheet_id"], [cc["email_config_tab"]], access_token(key)).get(cc["email_config_tab"], [])
+    return read
+
+
+def load_sheet(cfg, store, now, reader=None, email_reader=None):
+    """Sheet rows from cache, re-read every cctv.sheet_minutes. A failed read keeps the last good copy.
+
+    Returns (rows, readAt, error, email rows or None, email error)."""
     cc = cfg["cctv"]
     cache = store.read(*CACHE_FILE, default={}) or {}
     fresh = cache.get("tabs") == cc["sheet_tabs"] and cache.get("sheetId") == cc["sheet_id"]
@@ -297,23 +309,35 @@ def load_sheet(cfg, store, now, reader=None):
     if not fresh or last is None or (now - last).total_seconds() >= cc["sheet_minutes"] * 60:
         try:
             rows = (reader or default_reader(cfg))()
-            cache = {"sheetId": cc["sheet_id"], "tabs": cc["sheet_tabs"], "readAt": _iso(now), "rows": rows}
+            email_rows, email_error = cache.get("emailRows"), None
+            if cc.get("email_config_tab"):
+                try:
+                    email_rows = (email_reader or default_email_reader(cfg))()
+                except Exception as exc:  # emails fall back to Off (see cctv_mail); monitoring goes on
+                    email_error = str(exc)[:400]
+                    log.warning("CCTV Email Config tab read failed: %s", email_error)
+            cache = {"sheetId": cc["sheet_id"], "tabs": cc["sheet_tabs"], "readAt": _iso(now), "rows": rows,
+                     "emailRows": email_rows, "emailError": email_error}
             store.write(cache, *CACHE_FILE)
         except Exception as exc:  # keep monitoring with the last good copy
             error = str(exc)[:400]
             log.warning("CCTV sheet read failed: %s", error)
             if not fresh or "rows" not in cache:
                 raise SheetError(f"The CCTV sheet could not be read and there is no earlier copy: {error}")
-    return cache["rows"], cache["readAt"], error
+    return cache["rows"], cache["readAt"], error, cache.get("emailRows"), cache.get("emailError")
 
 
-def collect_sheet(cfg, store, now=None, reader=None, probe=None):
+def collect_sheet(cfg, store, now=None, reader=None, probe=None, email_reader=None):
     """Snapshot for cctv.json in sheet mode (same shape as SolarWinds mode, plus sheet fields)."""
     from .cctv import institutes, summarize
+    from .cctv_mail import parse_email_config
     cc = cfg["cctv"]
     now = now or datetime.now(timezone.utc)
-    rows, read_at, read_error = load_sheet(cfg, store, now, reader)
+    rows, read_at, read_error, email_rows, email_error = load_sheet(cfg, store, now, reader, email_reader)
     devices, problems, skipped = parse(rows)
+    email_cfg = parse_email_config(email_rows, cc.get("email_config_tab") or "Email Config", email_error,
+                                   [t for t in cc["sheet_tabs"] if any(d["tab"] == t for d in devices)])
+    problems = problems + email_cfg["problems"]
     results = check_all([d["ip"] for d in devices], cc, probe)
     reach = store.read(*REACH_FILE, default={}) or {}
     seen, down = set(reach.get("seen", [])), dict(reach.get("down", {}))
@@ -326,22 +350,26 @@ def collect_sheet(cfg, store, now=None, reader=None, probe=None):
         if rtt is not None:
             down.pop(d["ip"], None)
         elif d["ip"] not in down:
-            down[d["ip"]] = {"since": _iso(now), "source": "observed" if d["ip"] in seen else "first-seen"}
+            down[d["ip"]] = {"since": _iso(now), "source": "observed" if d["ip"] in seen else "first-seen", "fails": 1}
+        else:
+            down[d["ip"]]["fails"] = down[d["ip"]].get("fails", 1) + 1
         seen.add(d["ip"])
         info = down.get(d["ip"]) if rtt is None else None
         if info:
             hours = max(0.0, (now - _utc(info["since"])).total_seconds() / 3600)
             d.update(downSince=info["since"], downSinceExact=info["source"] == "observed",
-                     downSinceSource=info["source"], downHours=round(hours, 1), escalated=hours >= limit)
+                     downSinceSource=info["source"], downHours=round(hours, 1), escalated=hours >= limit,
+                     failedChecks=info.get("fails", 1))
         else:
-            d.update(downSince=None, downSinceExact=None, downSinceSource=None, downHours=None, escalated=False)
+            d.update(downSince=None, downSinceExact=None, downSinceSource=None, downHours=None, escalated=False,
+                     failedChecks=0)
     current = {d["ip"] for d in devices}
     store.write({"seen": sorted(seen & current), "down": {k: v for k, v in down.items() if k in current}}, *REACH_FILE)
     devices.sort(key=lambda d: (d["kind"] != "nvr", d["institute"].lower(), d["row"]))
     return {"schema": 1, "source": "sheet", "generatedAt": _iso(now), "nodesRead": len(devices),
             "summary": dict(summarize(devices, []), sheetProblems=len(problems)), "institutes": institutes(devices),
             "devices": devices, "sheetProblems": problems, "sheetRowsSkipped": skipped, "sheetReadAt": read_at,
-            "sheetError": read_error, "notInSolarWinds": [], "notInSolarWindsAt": None, "notInSolarWindsError": None,
+            "sheetError": read_error, "emailConfig": email_cfg, "notInSolarWinds": [], "notInSolarWindsAt": None, "notInSolarWindsError": None,
             "rules": {"source": "sheet", "sheetTabs": cc["sheet_tabs"], "check": cc["check"], "tcpPorts": cc["tcp_ports"],
                       "checkTries": cc["check_tries"], "escalateHours": limit, "pollMinutes": cc["poll_minutes"],
                       "sheetMinutes": cc["sheet_minutes"], "ipamRanges": []}}

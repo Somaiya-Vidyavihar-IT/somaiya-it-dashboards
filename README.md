@@ -48,7 +48,8 @@ Done and Already Done count as Marked Done; Working as expected is separate. All
 - **Data source:** either the **CCTV Google Sheet** (the master list; the campus collector reads the finished tabs with a read-only service account and pings every NVR and camera itself, `collector/netmon/cctv_sheet.py`), or **SolarWinds** (read with a read-only account, SWQL `SELECT` only, `collector/netmon/cctv.py`). The source is set on the collector; see [collector/README.md](collector/README.md#cctv-dashboard). In sheet mode a **Sheet problems** tab lists rows that are not monitored (bad or duplicate IPs, unknown types) with tab and row.
 - **Access:** its own list (`cctv.viewers` on the collector), separate from the IT Network Team list: being on one gives no access to the other dashboard. Same shared hub Google session, same campus-only API address (`netmonApiBase`).
 - **Check now:** available to everyone on the CCTV list; one round at a time, audited on the collector host.
-- **Not yet:** email notifications and escalation emails, and checking that video was actually recorded (needs the NVRs' own APIs).
+- **Emails (sheet mode):** from itsurveillance@somaiya.edu: NVR down/back up, many cameras down at once, a daily site report, escalations after 2 and 7 days, and monitoring problems. The one switch (Off / Test / On) and the recipients per site are in the sheet's Email Config tab; the Connection tab shows the switch, the last email and the recipients. See [collector/README.md](collector/README.md#emails-sheet-mode-netmoncctv_mailpy).
+- **Not yet:** checking that video was actually recorded (needs the NVRs' own APIs).
 
 ### AI Review in the dashboards
 
@@ -186,7 +187,7 @@ tests/
 .github/workflows/pages.yml       # Checks and Pages deployment
 ```
 
-Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-13-2`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
+Keep future dashboards in `site/<name>/` with a hub entry. Preserve the Pages subpath, shared session contract, and versioned resource/navigation pattern when addressing stale cached code: every `?v=` on shared scripts and the hub's embedded-dashboard URL uses one release token (currently `2026-11-13-3`). Change all of them together for a release; `tests/table-sort.cjs` fails if they differ. Read agent guidance explicitly when using an assistant; `claude.md` is supplied with the requested lowercase filename.
 
 ## Local development and checks
 
@@ -237,7 +238,7 @@ Use the existing Somaiya assets, Arial, Power Red `#B7202E`, Vitality Red `#ED1C
 - Unattended daily delivery requires a scheduled service and approved authorization design; it is not implemented on Pages.
 - Persistent login after every hub/dashboard context closes is not implemented. Google authorization still expires.
 - Daily snapshots, reopen/deletion history, and AI review version history are not stored.
-- CCTV Monitoring sends no emails yet and cannot tell whether video was recorded; it shows only whether each device answers (ping, TCP or SolarWinds).
+- CCTV Monitoring cannot tell whether video was recorded; it shows only whether each device answers (ping, TCP or SolarWinds). Emails exist only in sheet mode.
 - Wider acceptance checks should cover another support account, an account without sheet access, actual long-running expiry, global disconnect/reconnect, mobile devices, and downloaded CSV/PDF output.
 
 ## References

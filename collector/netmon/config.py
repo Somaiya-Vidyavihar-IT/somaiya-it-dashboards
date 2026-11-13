@@ -128,10 +128,14 @@ def validate(raw):
     srv.setdefault("python", "")
     srv["network_team"] = sorted({e.strip().lower() for e in srv["network_team"] if e.strip()})
     srv["allowed_domains"] = [d.strip().lower() for d in srv["allowed_domains"] if d.strip()]
-    return {"collector": col, "subnets": subnets, "wlc": wlc, "server": srv, "cctv": validate_cctv(raw.get("cctv", {}))}
+    cctv = validate_cctv(raw.get("cctv", {}))
+    if not cctv.get("email_team"):
+        cctv["email_team"] = list(srv["network_team"])
+    return {"collector": col, "subnets": subnets, "wlc": wlc, "server": srv, "cctv": cctv}
 
 
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 DEFAULT_NVR_NAME_PATTERN = r"(?<![A-Za-z])NVR(?![A-Za-z])"  # SAV-PHY-NVR-1, D.ed_NVR, KJSAC-NVR
 
 
@@ -152,6 +156,22 @@ def validate_cctv(raw):
     cc.setdefault("check_timeout_ms", 1000)
     cc.setdefault("check_tries", 2)           # down only after this many failed attempts in one round
     cc.setdefault("check_workers", 64)
+    # Emails (sheet mode). The on/off switch and the recipients are in the sheet's email_config_tab.
+    cc.setdefault("email_config_tab", "Email Config")
+    cc.setdefault("mail_from", "itsurveillance@somaiya.edu")
+    cc.setdefault("mail_from_name", "Somaiya CCTV Monitoring")
+    cc.setdefault("smtp_host", "smtp.gmail.com")
+    cc.setdefault("smtp_port", 587)
+    cc.setdefault("smtp_starttls", True)
+    cc.setdefault("smtp_username", "")        # blank = relay without login (e.g. Google SMTP relay by IP)
+    cc.setdefault("email_team", [])           # IT Network Team copy / test recipients; blank = server.network_team
+    cc.setdefault("dashboard_url", "https://somaiya-vidyavihar-it.github.io/somaiya-it-dashboards/#cctv-monitoring")
+    cc.setdefault("nvr_down_checks", 2)       # NVR down email after this many failed rounds in a row
+    cc.setdefault("mass_down_min", 5)         # "many cameras down" email: at least this many cameras ...
+    cc.setdefault("mass_down_fraction", 0.5)  # ... or this share of a site's cameras, going down in one round
+    cc.setdefault("digest_time", "09:00")     # daily site report, IST
+    cc.setdefault("escalate_again_days", 7)
+    cc.setdefault("urgent_per_site_hour", 4)
     cc.setdefault("solarwinds_host", "")
     cc.setdefault("solarwinds_port", 17774)
     cc.setdefault("solarwinds_username", "")
@@ -187,9 +207,26 @@ def validate_cctv(raw):
         if not isinstance(ports, list) or not ports or not all(isinstance(p, int) and 0 < p < 65536 for p in ports):
             raise ConfigError("cctv.tcp_ports must be a list of port numbers, e.g. [80, 554]")
         for key, low, high in (("sheet_minutes", 1, 1440), ("check_timeout_ms", 100, 10000), ("check_tries", 1, 5),
-                               ("check_workers", 1, 256)):
+                               ("check_workers", 1, 256), ("smtp_port", 1, 65535), ("nvr_down_checks", 1, 50),
+                               ("mass_down_min", 2, 10000), ("escalate_again_days", 1, 365),
+                               ("urgent_per_site_hour", 1, 100)):
             if not isinstance(cc[key], int) or not low <= cc[key] <= high:
                 raise ConfigError(f"cctv.{key} must be a whole number from {low} to {high}")
+        if not isinstance(cc["mass_down_fraction"], (int, float)) or not 0 < cc["mass_down_fraction"] <= 1:
+            raise ConfigError("cctv.mass_down_fraction must be a number above 0 and up to 1, e.g. 0.5")
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(cc["digest_time"])):
+            raise ConfigError('cctv.digest_time must be HH:MM (24 h, IST), e.g. "09:00"')
+        cc["email_config_tab"] = str(cc["email_config_tab"]).strip()
+        if cc["email_config_tab"] in cc["sheet_tabs"]:
+            raise ConfigError("cctv.email_config_tab must not also be listed in cctv.sheet_tabs")
+        for key in ("mail_from", "smtp_username"):
+            cc[key] = str(cc[key]).strip()
+        if cc["email_config_tab"] and not EMAIL_RE.fullmatch(cc["mail_from"]):
+            raise ConfigError("cctv.mail_from must be one email address, e.g. itsurveillance@somaiya.edu")
+        if not isinstance(cc["email_team"], list) or not all(isinstance(e, str) and EMAIL_RE.fullmatch(e.strip())
+                                                                for e in cc["email_team"]):
+            raise ConfigError('cctv.email_team must be a list of email addresses, e.g. ["a@somaiya.edu"]')
+        cc["email_team"] = sorted({e.strip().lower() for e in cc["email_team"]})
     else:
         cc["enabled"] = bool(cc["solarwinds_host"])
     if cc["source"] == "solarwinds" and cc["enabled"] and "<" in cc["solarwinds_host"]:
