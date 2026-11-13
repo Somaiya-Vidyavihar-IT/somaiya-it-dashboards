@@ -188,6 +188,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     new_counters = {}
     devices, problem_ports = [], []
     thr_err, thr_cpu, thr_poe = col["error_delta_threshold"], col["cpu_threshold"], col["poe_threshold"]
+    # Which read-only account logged in: set name + username from config (never the password).
+    user_of = {s["name"]: s["username"] for s in col.get("switch_credential_sets") or []}
     for r in records:
         ip = r["ip"]
         d = {"ip": ip, "hostname": r.get("hostname") or "", "institute": institute(ip), "platform": r.get("platform", ""),
@@ -195,7 +197,9 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
              "uptime": r.get("uptime", ""), "role": role_of(ip), "depth": depth.get(ip),
              "status": "ok" if r["ok"] else "failed", "error": r.get("error"), "warnings": r.get("warnings", [])[:10],
              "cpu": r.get("cpu"), "poe": None, "ports": None, "errDelta": None, "flags": [], "neighbors": [],
-             "commands": r.get("commands", [])[:80]}
+             "commands": r.get("commands", [])[:80],
+             "credentialSet": r.get("credentialSet", "") if r["ok"] else "",
+             "loginUser": user_of.get(r.get("credentialSet"), "") if r["ok"] else ""}
         if r.get("refreshedAt"):  # re-read on its own from the dashboard after the full run
             d.update(refreshedAt=r["refreshedAt"], refreshedBy=r.get("refreshedBy", ""))
         if not r["ok"]:
@@ -256,7 +260,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                         "uptime": "", "role": role_of(ip), "depth": depth.get(ip), "status": "no-ssh",
                         "error": "Does not answer SSH (tcp/22) from the collector", "warnings": [], "cpu": None,
                         "poe": None, "ports": None, "errDelta": None, "flags": ["no-ssh"], "neighbors": [],
-                        "commands": [], "seenFrom": seen_from})
+                        "commands": [], "credentialSet": "", "loginUser": "", "seenFrom": seen_from})
         where = ", ".join(f"{s['hostname'] or s['ip']} {s['port']}" for s in seen_from)
         finding("warning", "no-ssh", f"Switch {name or ip} ({ip}), seen on {where}, does not answer SSH (tcp/22) from "
                 "the collector, so it and the switches behind it are not read. Allow SSH from the collector "

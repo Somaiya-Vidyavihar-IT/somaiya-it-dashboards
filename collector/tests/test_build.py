@@ -91,6 +91,19 @@ class BuildSnapshot(unittest.TestCase):
         for t in ("ssh-failed", "cpu", "poe", "ap-not-in-wlc", "ap-down", "no-ssh"):
             self.assertIn(t, types)
 
+    def test_login_account_shown_per_switch(self):
+        """The dashboard shows which credential set (and its username, never the password) logged in."""
+        recs = campus()
+        recs[0]["credentialSet"] = "default"
+        recs[3]["credentialSet"] = "default"  # a failed record must not claim a working account
+        snap, _, _ = build.build(CFG, recs, WLC, now="2026-11-05T02:30:00Z", ssh_closed=frozenset({"10.0.1.50"}))
+        dev = {d["ip"]: d for d in snap["devices"]}
+        self.assertEqual((dev["10.0.0.1"]["credentialSet"], dev["10.0.0.1"]["loginUser"]), ("default", "<USER>"))
+        self.assertEqual((dev["10.0.1.1"]["credentialSet"], dev["10.0.1.1"]["loginUser"]), ("", ""), "older record")
+        for ip in ("10.0.1.3", "10.0.1.50"):
+            self.assertEqual((dev[ip]["credentialSet"], dev[ip]["loginUser"]), ("", ""), ip)
+        self.assertNotIn("password", " ".join(dev["10.0.0.1"]))
+
     def test_neighbour_switch_without_ssh_gets_its_own_row(self):
         """Seen live: the hostel distribution switches under the core block SSH from the collector and
         were only an info finding, so the dashboard showed no hostel switches at all."""

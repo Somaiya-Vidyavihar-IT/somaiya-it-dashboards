@@ -20,10 +20,10 @@ def write_excel(snapshot, path):
 
     sheets = [
         ("Devices", ["Institute", "Hostname", "Mgmt IP", "Role", "Platform", "Model", "Serial", "OS version",
-                     "Uptime", "Status", "CPU %", "PoE used W", "PoE available W", "Ports connected", "Err-disabled",
-                     "Flags", "Error"],
+                     "Uptime", "Status", "Login set", "Login user", "CPU %", "PoE used W", "PoE available W",
+                     "Ports connected", "Err-disabled", "Flags", "Error"],
          [[d["institute"], d["hostname"], d["ip"], d["role"], d["platform"], d["model"], d["serial"], d["version"],
-           d["uptime"], d["status"], d["cpu"], (d["poe"] or {}).get("usedW"), (d["poe"] or {}).get("availableW"),
+           d["uptime"], d["status"], d.get("credentialSet", ""), d.get("loginUser", ""), d["cpu"], (d["poe"] or {}).get("usedW"), (d["poe"] or {}).get("availableW"),
            (d["ports"] or {}).get("connected"), (d["ports"] or {}).get("errDisabled"), d["flags"], d["error"]]
           for d in snapshot["devices"]]),
         ("Connectivity Matrix", ["Device A", "IP A", "Port A", "Device B", "IP B", "Port B", "Protocols", "Seen both sides",
