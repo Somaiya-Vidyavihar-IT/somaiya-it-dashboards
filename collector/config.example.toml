@@ -54,12 +54,27 @@ allowed_domains = ["somaiya.edu"]
 network_team = ["<NETWORK_TEAM_EMAIL>@somaiya.edu"]
 python = ""                               # interpreter for Run now; blank = the one running the API
 
-# CCTV dashboard (site/cctv-monitoring): cameras and NVRs read from SolarWinds with a READ-ONLY account
-# (SWQL SELECT over HTTPS 17774). Leave solarwinds_host blank to turn it off. The API reads SolarWinds every
-# poll_minutes in the background; Read SolarWinds now does it on demand. Its viewer list is separate from
-# network_team: being on one list gives no access to the other dashboard.
+# CCTV dashboard (site/cctv-monitoring). Two sources:
+#  - source = "sheet": the CCTV Google Sheet is the master list; the collector pings (or TCP-checks) every
+#    NVR and camera in the listed tabs itself. Read with a Google service account (read-only); its JSON key
+#    stays on this host and the sheet is shared with the account's email as Viewer.
+#  - source = "solarwinds": cameras and NVRs read from SolarWinds with a READ-ONLY account (SWQL SELECT over
+#    HTTPS 17774).
+# The API checks every poll_minutes in the background; Check now does it on demand. Its viewer list is separate
+# from network_team: being on one list gives no access to the other dashboard.
 [cctv]
-solarwinds_host = ""                      # e.g. "<SOLARWINDS_MAIN_POLLER>"; blank = CCTV dashboard off
+source = "sheet"                          # "sheet" or "solarwinds"
+sheet_id = ""                             # e.g. "<SHEET_ID>" (between /d/ and /edit in its address); blank = off
+sheet_tabs = ["<FINISHED_TAB>"]           # only these tabs are monitored; add tabs as they are finished
+service_account_file = 'C:\netmon\secrets\cctv-sheet.json'
+sheet_minutes = 15                        # re-read the sheet at most this often
+check = "ping"                            # "ping" (ICMP echo) or "tcp" (connect to tcp_ports)
+tcp_ports = [80, 554]                     # used when check = "tcp"
+check_timeout_ms = 1000
+check_tries = 2                           # down only after this many failed attempts in one round
+check_workers = 64
+# --- source = "solarwinds" only ---
+solarwinds_host = ""                      # e.g. "<SOLARWINDS_MAIN_POLLER>"
 solarwinds_port = 17774
 solarwinds_username = "<SOLARWINDS_READONLY_USER>"
 solarwinds_cert_sha256 = ""               # blank = trust the certificate seen first, then insist on it

@@ -87,7 +87,7 @@ def status(cfg):
     if cfg["wlc"]["hosts"]:
         user = cfg["collector"].get("wlc_username") or ""
         rows.append(("wlc", user, bool(user and _lookup(cfg, "wlc", user))))
-    if cfg["cctv"]["enabled"]:
+    if cfg["cctv"]["enabled"] and cfg["cctv"]["source"] == "solarwinds":
         user = cfg["cctv"]["solarwinds_username"]
         rows.append(("solarwinds (cctv)", user, bool(user and _lookup(cfg, "solarwinds", user))))
     return rows

@@ -135,9 +135,23 @@ IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DEFAULT_NVR_NAME_PATTERN = r"(?<![A-Za-z])NVR(?![A-Za-z])"  # SAV-PHY-NVR-1, D.ed_NVR, KJSAC-NVR
 
 
+DEFAULT_SA_FILE = r"C:\netmon\secrets\cctv-sheet.json"
+
+
 def validate_cctv(raw):
-    """[cctv]: cameras and NVRs read from SolarWinds. Disabled (enabled = False) while solarwinds_host is blank."""
+    """[cctv]: cameras and NVRs, listed by SolarWinds (source = "solarwinds") or by the CCTV Google Sheet and
+    checked by the collector itself (source = "sheet"). Disabled (enabled = False) until that source is set."""
     cc = dict(raw or {})
+    cc.setdefault("source", "solarwinds")
+    cc.setdefault("sheet_id", "")
+    cc.setdefault("sheet_tabs", [])
+    cc.setdefault("service_account_file", DEFAULT_SA_FILE)
+    cc.setdefault("sheet_minutes", 15)        # re-read the sheet at most this often
+    cc.setdefault("check", "ping")            # sheet mode: "ping" (ICMP echo) or "tcp" (connect to tcp_ports)
+    cc.setdefault("tcp_ports", [80, 554])     # web UI and RTSP on Dahua/Hikvision cameras and NVRs
+    cc.setdefault("check_timeout_ms", 1000)
+    cc.setdefault("check_tries", 2)           # down only after this many failed attempts in one round
+    cc.setdefault("check_workers", 64)
     cc.setdefault("solarwinds_host", "")
     cc.setdefault("solarwinds_port", 17774)
     cc.setdefault("solarwinds_username", "")
@@ -153,8 +167,32 @@ def validate_cctv(raw):
     cc.setdefault("camera_ranges", [])
     cc.setdefault("ipam_ranges", [])
     cc["solarwinds_host"] = str(cc["solarwinds_host"]).strip()
-    cc["enabled"] = bool(cc["solarwinds_host"])
-    if cc["enabled"] and "<" in cc["solarwinds_host"]:
+    cc["source"] = str(cc["source"]).strip().lower()
+    if cc["source"] not in ("solarwinds", "sheet"):
+        raise ConfigError('cctv.source must be "solarwinds" or "sheet"')
+    cc["sheet_id"] = str(cc["sheet_id"]).strip()
+    if cc["source"] == "sheet":
+        cc["enabled"] = bool(cc["sheet_id"])
+        if cc["enabled"] and not re.fullmatch(r"[A-Za-z0-9_-]{20,100}", cc["sheet_id"]):
+            raise ConfigError("cctv.sheet_id must be the long ID from the sheet's address (between /d/ and /edit)")
+        tabs = cc["sheet_tabs"]
+        if not isinstance(tabs, list) or not all(isinstance(t, str) and t.strip() for t in tabs):
+            raise ConfigError('cctv.sheet_tabs must be a list of tab names, e.g. ["VTI", "HPC"]')
+        cc["sheet_tabs"] = [t.strip() for t in tabs]
+        if cc["enabled"] and not cc["sheet_tabs"]:
+            raise ConfigError("cctv.sheet_tabs is empty: list the finished tabs to monitor")
+        if cc["check"] not in ("ping", "tcp"):
+            raise ConfigError('cctv.check must be "ping" or "tcp"')
+        ports = cc["tcp_ports"]
+        if not isinstance(ports, list) or not ports or not all(isinstance(p, int) and 0 < p < 65536 for p in ports):
+            raise ConfigError("cctv.tcp_ports must be a list of port numbers, e.g. [80, 554]")
+        for key, low, high in (("sheet_minutes", 1, 1440), ("check_timeout_ms", 100, 10000), ("check_tries", 1, 5),
+                               ("check_workers", 1, 256)):
+            if not isinstance(cc[key], int) or not low <= cc[key] <= high:
+                raise ConfigError(f"cctv.{key} must be a whole number from {low} to {high}")
+    else:
+        cc["enabled"] = bool(cc["solarwinds_host"])
+    if cc["source"] == "solarwinds" and cc["enabled"] and "<" in cc["solarwinds_host"]:
         raise ConfigError("cctv.solarwinds_host still has a <...> placeholder")
     for key, low, high in (("solarwinds_port", 1, 65535), ("poll_minutes", 1, 1440), ("escalate_hours", 1, 24 * 90)):
         if not isinstance(cc[key], int) or not low <= cc[key] <= high:

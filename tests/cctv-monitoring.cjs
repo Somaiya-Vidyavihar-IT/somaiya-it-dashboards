@@ -98,5 +98,27 @@ const viewer=(p,m)=>p==='/api/v1/cctv/me'?{status:200,body:{email:'guard@somaiya
  // Not configured.
  h=harness('',viewer);await h.connect();assert.ok(h.el('data-note').textContent.includes('not configured'));
 
- console.log('Passed CCTV page: CCTV routes only, escaping, escalations, IPAM gap, filters, safe CSV, Read now, access denied, old server, unreachable, expiry, not configured.');
+ // Sheet mode: the CCTV sheet is the source and the collector pings each device itself.
+ const sheetSnap={schema:1,source:'sheet',generatedAt:'2026-11-13T06:00:00Z',nodesRead:3,sheetReadAt:'2026-11-13T05:55:00Z',sheetError:'Google answered 503',sheetRowsSkipped:2,
+  summary:{cameras:{total:2,up:1,warning:0,down:1,unmonitored:0,unknown:0,escalated:1},nvrs:{total:1,up:1,warning:0,down:0,unmonitored:0,unknown:0,escalated:0},escalated:1,notInSolarWinds:0,sheetProblems:1},
+  institutes:[{name:'Lab',cameras:2,camerasDown:1,nvrs:1,nvrsDown:0,escalated:1}],
+  devices:[dev({id:undefined,kind:'nvr',matchedBy:'sheet',name:'Lab - NVR',ip:'192.0.2.10',institute:'Lab',tab:'Lab',row:2}),
+   dev({kind:'camera',matchedBy:'sheet',name:'Lab - Lobby <i>x</i>',ip:'192.0.2.11',institute:'Lab',tab:'Lab',row:3,nvr:'Lab - NVR (192.0.2.10)',status:'down',downSince:'2026-11-10T06:00:00Z',downSinceExact:true,downSinceSource:'observed',downHours:72,escalated:true}),
+   dev({kind:'camera',matchedBy:'sheet',name:'Lab - Gate',ip:'192.0.2.12',institute:'Lab',tab:'Lab',row:4,nvr:'Lab - NVR (192.0.2.10)'})],
+  sheetProblems:[{tab:'Lab',row:9,issue:'IP missing or not valid',text:'10.1. <b>1</b>.76'}],notInSolarWinds:[],
+  rules:{source:'sheet',sheetTabs:['Lab'],check:'ping',tcpPorts:[80,554],checkTries:2,escalateHours:48,pollMinutes:5,sheetMinutes:15,ipamRanges:[]}};
+ h=harness(API,(p,m)=>p==='/api/v1/cctv/snapshot'?{status:200,body:sheetSnap}:viewer(p,m));await h.connect();
+ assert.equal(h.el('eyebrow').textContent,'CAMPUS CCTV · FROM THE CCTV SHEET');
+ assert.equal(h.el('nav-gap').hidden,true,'No SolarWinds gap tab in sheet mode');assert.equal(h.el('nav-problems').hidden,false);
+ assert.ok(h.el('data-note').textContent.includes('3 devices from the CCTV sheet (Lab)'));
+ assert.ok(h.el('poll-note').textContent.includes('could not be re-read'),'A failed sheet read is shown, with the copy in use');
+ assert.equal(h.el('cam-loc-head').textContent,'NVR');assert.ok(h.el('cam-rows').innerHTML.includes('Lab - NVR (192.0.2.10)'));
+ assert.ok(h.el('cam-rows').innerHTML.includes('Lab - Lobby &lt;i&gt;x&lt;/i&gt;')&&h.el('cam-rows').innerHTML.includes('Sheet · Lab row 3'));
+ assert.ok(h.el('prob-rows').innerHTML.includes('10.1. &lt;b&gt;1&lt;/b&gt;.76'),'Sheet text is escaped');
+ assert.ok(h.el('stats').innerHTML.includes('SHEET PROBLEMS')&&!h.el('stats').innerHTML.includes('NOT IN SOLARWINDS'));
+ assert.ok(h.el('esc-rows').innerHTML.includes('3 d 0 h')&&!h.el('esc-rows').innerHTML.includes('≥'),'Observed outages are exact');
+ assert.ok(h.el('rules').innerHTML.includes('ping (ICMP)'));assert.equal(h.el('poll-now').textContent,'Check now');
+ h.blobs.length=0;vm.runInContext("downloadCsv('camera')",h.ctx);assert.ok(h.blobs[0].includes('Sheet tab')&&h.blobs[0].includes('Lab - NVR (192.0.2.10)'));
+
+ console.log('Passed CCTV page: CCTV routes only, escaping, escalations, IPAM gap, filters, safe CSV, Read now, access denied, old server, unreachable, expiry, not configured, sheet mode.');
 })().catch(e=>{console.error(e);process.exitCode=1});

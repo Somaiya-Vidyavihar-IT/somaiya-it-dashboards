@@ -360,13 +360,16 @@ def poll_once(cfg, store, by="", query=None, clock=None):
     store.write(status, "cctv-status.json")
     t0 = time.monotonic()
     try:
-        q = query or make_query(cfg, store)
-        snap = collect(cfg, q, store, now=started)
+        if cfg["cctv"]["source"] == "sheet":
+            from .cctv_sheet import collect_sheet
+            snap = collect_sheet(cfg, store, now=started)
+        else:
+            snap = collect(cfg, query or make_query(cfg, store), store, now=started)
         store.write(snap, "cctv.json")
         status.update(state="ok", ok=True, lastSuccessAt=snap["generatedAt"],
                       cameras=snap["summary"]["cameras"]["total"], nvrs=snap["summary"]["nvrs"]["total"])
     except Exception as exc:  # report every failure on the page; never crash the API thread
-        msg = str(exc) if isinstance(exc, SwisError) or exc.__class__.__name__ == "CredentialError" \
+        msg = str(exc) if isinstance(exc, SwisError) or exc.__class__.__name__ in ("CredentialError", "SheetError") \
             else f"{exc.__class__.__name__}: {exc}"
         log.warning("CCTV poll failed: %s", msg)
         status.update(state="failed", ok=False, error=msg[:500])

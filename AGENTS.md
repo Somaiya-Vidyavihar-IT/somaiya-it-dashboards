@@ -15,7 +15,7 @@ Somaiya IT Dashboards is a read-only GitHub Pages hub for the support team. Goog
 - `site/shared/session.js` and `session-worker.js`: portal-owned and shared in-memory authorization, tab exchange, and recovery.
 - `site/config.js`: public Google OAuth client ID and the campus network API address (`netmonApiBase`).
 - `site/network-monitoring/index.html`: Network Monitoring UI. Its data comes from the campus collector API, not Google Sheets.
-- `site/cctv-monitoring/index.html`: CCTV Monitoring UI. Same campus API (`/api/v1/cctv/*`), which reads SolarWinds; separate access list.
+- `site/cctv-monitoring/index.html`: CCTV Monitoring UI. Same campus API (`/api/v1/cctv/*`); device list from the CCTV Google Sheet (collector pings each device) or SolarWinds; separate access list.
 - `site/vendor/viz/`: unmodified Viz.js (Graphviz in WebAssembly), the one approved browser dependency. Required to lay out the topology DOT file; loaded only by the Topology diagram. Update it only from the npm tarball with a checked integrity hash (see its README).
 - `collector/`: the Python network collector, the SolarWinds reader for CCTV (`netmon/cctv.py`) and the HTTPS API (`netmon`) that run on a campus Windows host. It is never deployed to Pages.
 - `.github/workflows/pages.yml`: validation and deployment of `site/` only. It also runs the collector's unit tests.
@@ -35,6 +35,7 @@ Preserve the existing structure for focused changes. Do not introduce a framewor
 
 - Separate dashboard with its own allowlist (`cctv.viewers`). `/api/v1/cctv/*` checks only that list and the network routes only `network_team`; keep them separate.
 - Data contract `cctv.json` (`schema: 1`): `generatedAt`, `nodesRead`, `summary` (`cameras`/`nvrs` counts by status up/warning/down/unmonitored/unknown + escalated, `escalated`, `notInSolarWinds`), `institutes`, `devices` (id, kind camera/nvr, matchedBy tag/name/range, name, ip, institute, location, vendor, model, type, status, statusText, downSince UTC, downSinceExact, downSinceSource event/before-events/first-seen, downHours, escalated), `notInSolarWinds` (ip, mac, vendor, name, lastSeen), `rules`.
+- Sheet mode (`cctv.source = "sheet"`, `netmon/cctv_sheet.py`): read-only Sheets scope via a service account whose JSON key stays on the collector host (never in the repo). Only `cctv.sheet_tabs` are read. `cctv.json` then has `source: "sheet"`, devices with `tab`, `row`, `nvr`, `serial`, `warranty`, `expiry`, `sheetStatus`, `rttMs`, `downSinceSource` observed/first-seen, plus `sheetProblems` (tab, row, issue, text), `sheetRowsSkipped`, `sheetReadAt`, `sheetError`. Sheet cells are untrusted text.
 - SolarWinds access is read-only: every statement must be a SWQL `SELECT` (enforced in `Swis.query`). Never add `Invoke`, create, update or delete calls. The SWIS certificate is pinned by SHA-256.
 - Node names, locations and IPAM names are untrusted: escape them in HTML and keep them out of CSV formulas.
 - No email or alerting yet (phase 2). Camera recognition rules live in the collector config, not the page.

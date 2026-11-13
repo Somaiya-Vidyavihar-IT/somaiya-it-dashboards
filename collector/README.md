@@ -1,6 +1,6 @@
 # netmon: campus network collector and API
 
-Backend for the hub's **Network Monitoring** dashboard (`site/network-monitoring/`) and **CCTV Monitoring** dashboard (`site/cctv-monitoring/`, see [CCTV dashboard](#cctv-dashboard-solarwinds)). It runs on a campus Windows host, never on GitHub Pages.
+Backend for the hub's **Network Monitoring** dashboard (`site/network-monitoring/`) and **CCTV Monitoring** dashboard (`site/cctv-monitoring/`, see [CCTV dashboard](#cctv-dashboard)). It runs on a campus Windows host, never on GitHub Pages.
 
 - **Collector:** logs in over SSH with a read-only account and sends only `show` commands to the Nexus 9K core, the Catalyst / SG / CBS / C1300 distribution and access switches, and the Aruba WLCs. The workflow follows the network team's LLD: sweep the configured subnets for TCP/22, log in, `show version`, CDP + LLDP neighbours, crawl new neighbours inside the configured subnets, then write reports.
 - **Outputs** (in `data_dir`): `latest.json` (the dashboard snapshot), timestamped snapshots, `inventory-latest.xlsx` (Devices, Connectivity Matrix, Access Points, Problem Ports, Findings, Neighbours) and `topology-latest.dot` (Graphviz).
@@ -73,18 +73,30 @@ A plain-language, step-by-step guide for the network team is kept in the network
 
 Switches can use several read-only accounts. `switch_credential_sets` lists them in the order to try. For each switch the collector tries the set that worked last time first, then the others, and remembers the winner in `data\state\credentials.json` (set names only). A switch where every set fails is shown as "SSH authentication failed with all N credential sets". A new switch costs at most N−1 failed logins, once.
 
-## CCTV dashboard (SolarWinds)
+## CCTV dashboard
 
-The CCTV page shows cameras and NVRs up or down, the NVR inventory, and everything down longer than `cctv.escalate_hours` (48). SolarWinds already polls these devices; `netmon/cctv.py` only reads its results through the SolarWinds Information Service (`https://<host>:17774/SolarWinds/InformationService/v3/Json/Query`) with a **read-only** SolarWinds account. Every statement is checked to be a SWQL `SELECT` before it is sent.
+The CCTV page shows cameras and NVRs up or down, the NVR inventory, and everything down longer than `cctv.escalate_hours` (48). It runs inside `netmon-api` as a background thread (no extra scheduled task), every `poll_minutes`; **Check now** on the page wakes it early (one round at a time; requests are written to `audit.log`). `C:\netmon\netmon cctv` does one round by hand and prints a summary. Outputs: `data\cctv.json` (the page snapshot) and `data\cctv-status.json`. `cctv.source` picks where the device list comes from.
 
-- **Where it runs:** inside `netmon-api` as a background thread (no extra scheduled task). It reads every `poll_minutes`, and **Read SolarWinds now** on the page wakes it early (one read at a time; requests are written to `audit.log`). `C:\netmon\netmon cctv` does one read by hand and prints a summary.
+### Sheet mode (`source = "sheet"`): the CCTV Google Sheet is the master list
+
+`netmon/cctv_sheet.py` reads the tabs in `sheet_tabs` (only finished tabs) of the sheet `sheet_id` and checks every device itself.
+
+- **Reading the sheet:** a Google **service account** with the read-only Sheets scope (JWT bearer, no extra packages). Its JSON key is only on the collector host (`service_account_file`, default `C:\netmon\secrets\cctv-sheet.json`, readable by Administrators and the service account); the sheet is shared with the account's email as **Viewer**, and the Google Sheets API is enabled in its project. The sheet is re-read at most every `sheet_minutes` (15); if a read fails, the last good copy is used and the page says so.
+- **Rows:** in each tab the header row is the first row with an `IP` cell. Columns: `Location`, `Device Type` or `Particulars`, `IP`, and when present `Model`, `Serial No.`, `Warranty`, `Date of Expiry`, `Status`. A type containing "NVR" is an NVR; camera/CCTV/dome/bullet/PTZ is a camera; HDD rows are skipped. A camera is linked to the nearest NVR row above it in its tab. The tab name is the site. Rows with a bad or duplicate IP, a blank or unknown type are not monitored and are listed on the page under **Sheet problems** with tab and row.
+- **Up/down:** ICMP echo from the collector (`check = "ping"`; Windows `IcmpSendEcho`, no admin rights needed) or a TCP connect to `tcp_ports` (`check = "tcp"`, default 80 and 554), `check_tries` attempts with `check_timeout_ms` each, `check_workers` in parallel. The collector host needs ICMP (or those ports) to the camera and NVR subnets.
+- **Down since:** the collector's own history (`data\state\cctv-reach.json`): "observed" (exact to one round) when a device that answered earlier stops answering; "at least since" when it was already down the first time it was checked.
+- **Setup:** copy the key to `service_account_file`, set `source`, `sheet_id`, `sheet_tabs` and `viewers` in `[cctv]`, run `C:\netmon\netmon check-config` and `C:\netmon\netmon cctv`, then restart `netmon-api`.
+
+### SolarWinds mode (`source = "solarwinds"`)
+
+SolarWinds already polls these devices; `netmon/cctv.py` only reads its results through the SolarWinds Information Service (`https://<host>:17774/SolarWinds/InformationService/v3/Json/Query`) with a **read-only** SolarWinds account. Every statement is checked to be a SWQL `SELECT` before it is sent.
+
 - **Which nodes are cameras/NVRs** (SolarWinds has no built-in camera type): the node custom property `type_property` (`Device_Type`) in `nvr_types` / `camera_types`; else, untagged, a name matching `nvr_name_pattern` is an NVR; else, untagged, an IP in `camera_ranges` is a camera. A node tagged as anything else (e.g. `SWITCH`) is never a camera. Institute: the `institute_property` (`InstituteName`) or the matching `[[subnets]]` institute.
 - **Down since:** the last SolarWinds node-down event (`Orion.Events`, EventType 1, UTC). SolarWinds keeps about 30 days of events; older outages show as "before <oldest event>" and count as escalated. If events cannot be read, the first read that saw it down is used ("at least since"). Kept in `data\state\cctv-state.json`.
 - **Not in SolarWinds:** with `ipam_ranges` set, live IPs that SolarWinds IPAM sees in those CCTV subnets but that are not SolarWinds nodes (checked at most hourly).
 - **Certificate:** SWIS usually has a self-signed certificate. Its SHA-256 fingerprint is pinned: `solarwinds_cert_sha256`, or else the one seen first (`data\state\solarwinds-cert.json`; delete it after SolarWinds renews its certificate).
-- **Outputs:** `data\cctv.json` (the page snapshot) and `data\cctv-status.json`.
 - **Setup:** fill `[cctv]` in `config.toml` (see `config.example.toml`), then as the service account `C:\netmon\netmon set-password solarwinds`, `C:\netmon\netmon cctv` (test read), and restart `netmon-api`. The collector host needs TCP 17774 to the SolarWinds main polling engine.
-- **No alerts or emails yet** (planned for phase 2), and no check that video was recorded: SolarWinds only knows ping/SNMP.
+**Either mode:** no alerts or emails yet (planned for phase 2), and no check that video was recorded: ping and SolarWinds only show that a device answers.
 
 ## Access control
 

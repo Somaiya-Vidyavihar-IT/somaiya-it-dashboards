@@ -114,13 +114,19 @@ def main(argv=None):
         for f in (cfg["server"]["cert_file"], cfg["server"]["key_file"]):
             print(f"  {'found  ' if f and os.path.exists(f) else 'MISSING'} {f or '(not set)'}")
         cc = cfg["cctv"]
-        if cc["enabled"]:
+        if cc["enabled"] and cc["source"] == "sheet":
+            sa = cc["service_account_file"]
+            print(f"  CCTV: sheet {cc['sheet_id'][:12]}..., tabs {', '.join(cc['sheet_tabs'])}, {cc['check']} check, "
+                  f"{len(cc['viewers'])} viewer emails, every {cc['poll_minutes']} min")
+            print(f"  {'found  ' if os.path.exists(sa) else 'MISSING'} {sa} (service account key for the CCTV sheet)")
+            missing += not os.path.exists(sa)
+        elif cc["enabled"]:
             print(f"  CCTV: SolarWinds {cc['solarwinds_host']}:{cc['solarwinds_port']}, {len(cc['viewers'])} viewer emails, "
                   f"{len(cc['camera_ranges_nets'])} camera ranges, every {cc['poll_minutes']} min")
-            if not cc["viewers"]:
-                print("  WARNING: cctv.viewers is empty; nobody can open the CCTV dashboard.")
         else:
-            print("  CCTV: off (cctv.solarwinds_host is blank)")
+            print("  CCTV: off (set cctv.sheet_id with source = \"sheet\", or cctv.solarwinds_host)")
+        if cc["enabled"] and not cc["viewers"]:
+            print("  WARNING: cctv.viewers is empty; nobody can open the CCTV dashboard.")
         return 1 if missing else 0
 
 
@@ -128,7 +134,7 @@ def _cctv(cfg):
     from . import cctv
     from .store import Store
     if not cfg["cctv"]["enabled"]:
-        raise SystemExit("CCTV is off: set cctv.solarwinds_host in config.toml first")
+        raise SystemExit("CCTV is off: set cctv.sheet_id (source = \"sheet\") or cctv.solarwinds_host in config.toml first")
     store = Store(cfg["collector"]["data_dir"])
     st = cctv.poll_once(cfg, store, by="command line")
     if not st["ok"]:
@@ -137,12 +143,19 @@ def _cctv(cfg):
     snap = store.read("cctv.json", default={}) or {}
     s = snap.get("summary", {})
     cam, nvr = s.get("cameras", {}), s.get("nvrs", {})
-    print(f"Read {snap.get('nodesRead')} SolarWinds nodes in {st.get('seconds')} s.")
+    if snap.get("source") == "sheet":
+        print(f"Checked {snap.get('nodesRead')} devices from the CCTV sheet ({', '.join(cfg['cctv']['sheet_tabs'])}) "
+              f"by {cfg['cctv']['check']} in {st.get('seconds')} s.")
+        if snap.get("sheetError"):
+            print(f"  WARNING: sheet read failed, using the copy from {snap.get('sheetReadAt')}: {snap['sheetError']}")
+        print(f"  Sheet problems (bad/duplicate IPs, unknown types): {s.get('sheetProblems')}")
+    else:
+        print(f"Read {snap.get('nodesRead')} SolarWinds nodes in {st.get('seconds')} s.")
     print(f"  Cameras: {cam.get('total')} ({cam.get('up')} up, {cam.get('warning')} warning, {cam.get('down')} down, "
           f"{cam.get('unmonitored')} not monitored)")
     print(f"  NVRs:    {nvr.get('total')} ({nvr.get('up')} up, {nvr.get('warning')} warning, {nvr.get('down')} down)")
     print(f"  Down more than {cfg['cctv']['escalate_hours']} h: {s.get('escalated')}")
-    if cfg["cctv"]["ipam_ranges_nets"]:
+    if snap.get("source") != "sheet" and cfg["cctv"]["ipam_ranges_nets"]:
         print(f"  Live in IPAM CCTV ranges but not in SolarWinds: {s.get('notInSolarWinds')}"
               + (f" (IPAM check failed: {snap.get('notInSolarWindsError')})" if snap.get("notInSolarWindsError") else ""))
     print(f"Saved {store.path('cctv.json')}")
