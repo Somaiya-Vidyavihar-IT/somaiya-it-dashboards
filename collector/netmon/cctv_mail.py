@@ -1,4 +1,4 @@
-"""CCTV emails (sheet mode), sent as cctv.mail_from (itsurveillance@somaiya.edu).
+"""CCTV emails (sheet mode), sent as cctv.mail_from, HTML in the network team's alert layout plus a text part.
 
 Everything about who gets what is in the sheet's "Email Config" tab:
 
@@ -19,6 +19,7 @@ Emails (each at most once per outage, remembered in state/cctv-mail.json, so res
 Devices already down when a site is first seen (or when emails are first evaluated) never trigger urgent mails;
 they appear in the next daily report. Messages that cannot be sent wait in an outbox and are retried for 24 h.
 """
+import html
 import logging
 import math
 import smtplib
@@ -134,17 +135,108 @@ def parse_email_config(rows, tab="Email Config", read_error=None, monitored=()):
 
 
 # ---------------------------------------------------------------- composing
+#
+# Every email is built from "sections" and rendered twice: an HTML part in the layout the network team's
+# "Alert: Network Device Status Report" emails use (logos, "Dear ...", a device table with a red DOWN /
+# green UP status, "Best Wishes," and the red bars), and a plain-text part for clients that show no HTML.
+#   ("p", text)                               a paragraph (newlines kept)
+#   ("table", title or None, rows, column)    rows = [(device or change event, "DOWN"/"UP", text for column)]
+# Everything from the sheet is HTML-escaped. The two logos are the university's public emailer images; the
+# device type is a coloured text badge rather than an icon image (the network team's icons are on a bucket that
+# now answers 403, and a badge still shows when a mail client blocks images).
 
-def _line(d):
-    where = f" · NVR {d['nvr']}" if d.get("nvr") else ""
-    return f"- {d['name']} ({'NVR' if d['kind'] == 'nvr' else 'camera'}, {d['ip']}){where}"
+LOGO_LEFT = ("https://svv-public-data.somaiya.edu/emailer-images/university-logo.png", "Somaiya Vidyavihar University", 60)
+LOGO_RIGHT = ("https://svv-public-data.somaiya.edu/emailer-images/footer-trust.png", "Somaiya Trust", 42)
+BADGES = {"nvr": ("NVR", "#b7202e"), "camera": ("CCTV", "#58595b")}
+RED, DARK_RED, GREEN = "#ee1c24", "#b7202e", "#1a7f37"
+_TD = "padding:10px;border:1px solid #ddd;text-align:left;vertical-align:top"
 
 
-def _footer(cc):
+def _label(d):
+    return BADGES.get(d.get("kind"), BADGES["camera"])[0]
+
+
+def _row_text(d, status, when):
+    nvr = f" · NVR: {d['nvr']}" if d.get("nvr") else ""
+    return f"- {_label(d)} {d['ip']} · {d['name']}{nvr} · {status}" + (f" · {when}" if when else "")
+
+
+def render_text(greeting, sections, banner=None):
+    out = [banner] if banner else []
+    out.append(greeting)
+    for s in sections:
+        if s[0] == "p":
+            out.append(s[1])
+        elif s[0] == "table":
+            lines = "\n".join(_row_text(d, status, when) for d, status, when in s[2])
+            out.append((f"{s[1]}:\n" if s[1] else "") + lines)
+    out.append("Best Wishes,\nSomaiya CCTV Monitoring")
+    return "\n\n".join(out)
+
+
+def _p(text, style="font-size:14px;line-height:24px;margin:0 0 10px"):
+    return f'<p style="{style}">' + html.escape(str(text)).replace("\n", "<br>") + "</p>"
+
+
+def _table_html(title, rows, column):
+    e = html.escape
+    out = []
+    if title:
+        out.append(f'<p style="font-size:14px;line-height:22px;font-weight:bold;margin:20px 0 6px">{e(title)}</p>')
+    out.append('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-top:'
+               + ("0" if title else "20px") + ';font-size:14px"><thead><tr style="background-color:#f2f2f2">'
+               + "".join(f'<th style="{_TD}">{e(h)}</th>' for h in ("Device Type", "IP Address", "Location", "Status", column))
+               + "</tr></thead><tbody>")
+    for d, status, when in rows:
+        label, bg = BADGES.get(d.get("kind"), BADGES["camera"])
+        nvr = (f'<br><span style="font-size:12px;color:#555">NVR: {e(str(d["nvr"]))}</span>' if d.get("nvr") else "")
+        colour = RED if status == "DOWN" else GREEN
+        out.append(f'<tr><td style="{_TD}"><span style="display:inline-block;padding:3px 8px;border-radius:3px;background:{bg};'
+                   f'color:#fff;font-size:12px;font-weight:bold;letter-spacing:0.5px">{label}</span></td>'
+                   f'<td style="{_TD}">{e(str(d["ip"]))}</td><td style="{_TD}">{e(str(d["name"]))}{nvr}</td>'
+                   f'<td style="{_TD};color:{colour};font-weight:bold">{status}</td><td style="{_TD}">{e(when or "")}</td></tr>')
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
+def render_html(cc, greeting, sections, banner=None):
+    e = html.escape
+    body = []
+    if banner:
+        body.append('<div style="background:#fff4ce;border:1px solid #e0c060;padding:10px;margin:0 0 15px;font-size:13px;'
+                    'line-height:20px">' + e(banner).replace("\n", "<br>") + "</div>")
+    body.append(_p(greeting, "font-size:15px;line-height:24px;font-weight:bold;margin:0 0 10px"))
+    for s in sections:
+        body.append(_p(s[1]) if s[0] == "p" else _table_html(s[1], s[2], s[3]) if s[0] == "table" else "")
+    dash = e(cc["dashboard_url"])
+    note = ("Status comes from the CCTV monitoring collector, which pings every NVR and camera in the CCTV assets "
+            "sheet every few minutes. Recipients are set in the sheet's Email Config tab. This is an automatic "
+            f"message from {e(cc['mail_from'])}.")
+    return (
+        '<div><table cellpadding="0" cellspacing="0" style="max-width:700px;width:100%;border:1px solid #b7b7b7;'
+        'font-family:sans-serif;margin:0 auto">'
+        f'<thead><tr><td style="padding:10px;vertical-align:middle"><img src="{LOGO_LEFT[0]}" alt="{LOGO_LEFT[1]}" style="height:{LOGO_LEFT[2]}px;max-width:100%"></td>'
+        f'<td style="padding:10px;text-align:right;vertical-align:middle"><img src="{LOGO_RIGHT[0]}" alt="{LOGO_RIGHT[1]}" style="height:{LOGO_RIGHT[2]}px;max-width:100%"></td></tr></thead>'
+        '<tbody><tr><td colspan="2" style="padding:20px 10px 10px">' + "".join(body) + '</td></tr>'
+        '<tr><td colspan="2" style="padding:10px 10px 10px"><p style="font-size:14px;margin:0 0 5px;color:#000"><b>Best Wishes,</b></p>'
+        '<p style="font-size:14px;margin:0 0 10px;color:#000">Somaiya CCTV Monitoring</p>'
+        f'<p style="font-size:12px;line-height:18px;color:#777;margin:0">Dashboard: <a href="{dash}" style="color:#777">{dash}</a><br>{note}</p></td></tr>'
+        f'<tr><td colspan="2"><div style="height:30px;border-right:60px solid {DARK_RED}"></div></td></tr>'
+        f'<tr><td colspan="2"><table cellpadding="0" cellspacing="0" style="width:100%"><tr>'
+        f'<td width="20%" style="height:30px;background-color:{RED}"></td><td width="80%" style="height:30px;background-color:{DARK_RED}"></td>'
+        '</tr></table></td></tr></tbody></table></div>')
+
+
+def _footer_text(cc):
     return (f"\n\nDashboard: {cc['dashboard_url']}\n"
             "Status comes from the CCTV monitoring collector, which pings every NVR and camera listed in the "
             "CCTV assets sheet every few minutes. Recipients are set in the sheet's Email Config tab.\n"
             "This is an automatic message from " + cc["mail_from"] + ".")
+
+
+def _since(d, prefix="since "):
+    approx = "" if d.get("downSinceExact") else "at least "
+    return f"{prefix}{ist(d.get('downSince'))} ({approx}{duration(d.get('downHours'))})"
 
 
 def _clean_subject(text):
@@ -173,7 +265,7 @@ class Mailer:
         cc = [a for i, a in enumerate(cc) if a not in to and a not in cc[:i]]
         return to, cc
 
-    def add(self, site, kind, subject, body):
+    def add(self, site, kind, subject, sections):
         to, cc = self._recipients(site, kind)
         if not to:
             return False  # no IT SPOC (reported as an Email Config problem)
@@ -183,15 +275,19 @@ class Mailer:
             self.state.setdefault("held", {})
             self.state["held"][site] = self.state["held"].get(site, 0) + 1
             return False
+        banner = None
         if self.mode == "test":
             if not self.team:
                 return False
-            body = (f"TEST MODE: this email went only to the IT Network Team.\nIn On mode it would go to:\n"
-                    f"  To: {', '.join(to)}\n  Cc: {', '.join(cc) or '-'}\n\n") + body
+            banner = (f"TEST MODE: this email went only to the IT Network Team.\nIn On mode it would go to:\n"
+                      f"To: {', '.join(to)}\nCc: {', '.join(cc) or '-'}")
             to, cc, subject = list(self.team), [], "[TEST] " + subject
+        greeting = "Dear IT Network Team," if kind == "system" else f"Dear {site} IT Team,"
         self.messages.append({"id": make_msgid(domain=self.cc["mail_from"].split("@")[-1]), "kind": kind, "site": site,
-                              "subject": _clean_subject(subject), "body": body + _footer(self.cc), "to": to, "cc": cc,
-                              "created": _iso(self.now)})
+                              "subject": _clean_subject(subject),
+                              "body": render_text(greeting, sections, banner) + _footer_text(self.cc),
+                              "html": render_html(self.cc, greeting, sections, banner),
+                              "to": to, "cc": cc, "created": _iso(self.now)})
         if kind in URGENT:
             self.state.setdefault("urgentLog", []).append({"site": site, "at": _iso(self.now)})
         return True
@@ -263,14 +359,15 @@ def process(cfg, store, snap, now=None, send=None):
 
     for d in nvr_down:
         cams = [c for c in by_site[d["tab"]] if c.get("nvr") and c["nvr"].endswith(f"({d['ip']})")]
-        m.add(d["tab"], "nvr-down", f"[CCTV] {d['tab']}: NVR down - {d['name']} ({d['ip']})",
-              f"The NVR {d['name']} ({d['ip']}) at {d['tab']} has not answered since {ist(d.get('downSince'))} "
-              f"({d.get('failedChecks')} checks in a row).\n\nCameras recording to it are probably not being "
-              f"recorded ({len(cams)} listed under it in the sheet).\n\nPlease check its power, network cable and "
-              f"switch port.")
+        m.add(d["tab"], "nvr-down", f"[CCTV] {d['tab']}: NVR down - {d['name']} ({d['ip']})", [
+            ("p", f"The following NVR at {d['tab']} is currently down ({d.get('failedChecks')} checks in a row). "
+                  f"Cameras recording to it are probably not being recorded ({len(cams)} listed under it in the sheet). "
+                  "Please check its power, network cable and switch port."),
+            ("table", None, [(d, "DOWN", _since(d, ""))], "Down Since")])
     for d, hours in nvr_up:
-        m.add(d["tab"], "nvr-up", f"[CCTV] {d['tab']}: NVR back up after {duration(hours)} - {d['name']}",
-              f"The NVR {d['name']} ({d['ip']}) at {d['tab']} answers again, after {duration(hours)} down.")
+        m.add(d["tab"], "nvr-up", f"[CCTV] {d['tab']}: NVR back up after {duration(hours)} - {d['name']}", [
+            ("p", f"The following NVR at {d['tab']} answers again, after {duration(hours)} down. No action is needed."),
+            ("table", None, [(d, "UP", f"{ist(_iso(now))} (down {duration(hours)})")], "Back Up At")])
 
     for site, ds in new_down.items():
         cams = [d for d in ds if d["kind"] == "camera"]
@@ -278,19 +375,22 @@ def process(cfg, store, snap, now=None, send=None):
         need = min(cc["mass_down_min"], max(2, math.ceil(cc["mass_down_fraction"] * total)))
         if cams and len(cams) >= need and site not in st["mass"]:
             st["mass"][site] = {"since": _iso(now), "ips": [d["ip"] for d in cams]}
-            m.add(site, "mass-down", f"[CCTV] {site}: {len(cams)} cameras down at once",
-                  f"{len(cams)} of {total} cameras at {site} stopped answering at {ist(_iso(now))}. When many go down "
-                  "together it is usually a network switch, power or uplink fault rather than the cameras.\n\n"
-                  + "\n".join(_line(d) for d in cams))
+            m.add(site, "mass-down", f"[CCTV] {site}: {len(cams)} cameras down at once", [
+                ("p", f"{len(cams)} of {total} cameras at {site} stopped answering at {ist(_iso(now))}. When many go down "
+                      "together it is usually a network switch, power or uplink fault rather than the cameras. "
+                      "Please take necessary action to resolve the issue."),
+                ("table", None, [(d, "DOWN", _since(d, "")) for d in cams], "Down Since")])
     by_ip = {d["ip"]: d for d in devs}
     for site, mass in list(st["mass"].items()):
         still = [ip for ip in mass["ips"] if by_ip.get(ip, {}).get("status") == "down"]
         if len(still) <= len(mass["ips"]) * 0.2:
             since = _utc(mass["since"])
             hours = (now - since).total_seconds() / 3600 if since else None
-            m.add(site, "mass-up", f"[CCTV] {site}: cameras back up after {duration(hours)}",
-                  f"Most of the {len(mass['ips'])} cameras that went down together at {site} answer again "
-                  f"({duration(hours)})." + (f"\n\nStill down:\n" + "\n".join(_line(by_ip[ip]) for ip in still) if still else ""))
+            m.add(site, "mass-up", f"[CCTV] {site}: cameras back up after {duration(hours)}", [
+                ("p", f"Most of the {len(mass['ips'])} cameras that went down together at {site} answer again "
+                      f"(after {duration(hours)})." + (" The ones below are still down." if still else " No action is needed."))]
+                + ([("table", "Still down", [(by_ip[ip], "DOWN", _since(by_ip[ip], "")) for ip in still], "Down Since")]
+                   if still else []))
             del st["mass"][site]
 
     for kind, sites in esc.items():
@@ -300,11 +400,10 @@ def process(cfg, store, snap, now=None, send=None):
             days = f"{cc['escalate_again_days']} days"
         for site, ds in sites.items():
             ds = sorted(ds, key=lambda d: -(d.get("downHours") or 0))
-            m.add(site, kind, f"[CCTV] {site} escalation: {len(ds)} device{'s' if len(ds) > 1 else ''} down more than {days}",
-                  f"These have been down at {site} for more than {days} and still do not answer:\n\n"
-                  + "\n".join(f"{_line(d)}\n    down since {ist(d.get('downSince'))} ({'at least ' if not d.get('downSinceExact') else ''}"
-                              f"{duration(d.get('downHours'))})" for d in ds)
-                  + "\n\nPlease arrange the repair or tell IT what is blocking it.")
+            m.add(site, kind, f"[CCTV] {site} escalation: {len(ds)} device{'s' if len(ds) > 1 else ''} down more than {days}", [
+                ("p", f"The following CCTV devices at {site} have been down for more than {days} and still do not answer. "
+                      "Please arrange the repair or tell IT what is blocking it."),
+                ("table", None, [(d, "DOWN", _since(d, "")) for d in ds], "Down Since")])
 
     _daily(cc, st, m, by_site, now, email_cfg, snap)
     st["messagesQueued"] = len(m.messages)
@@ -343,19 +442,19 @@ def _daily(cc, st, m, by_site, now, email_cfg, snap):
             continue
         went = [c for c in changes if c["type"] == "down"]
         back = [c for c in changes if c["type"] == "up"]
-        parts = [f"{site}: {len(down)} down now, {len(went)} went down and {len(back)} came back since the last report."]
+        parts = [("p", f"{site}: {len(down)} down now, {len(went)} went down and {len(back)} came back since the last report."
+                       + (" The following CCTV devices are currently down. Please take necessary action to resolve the issues."
+                          if down else " Nothing is down now."))]
         if down:
-            parts.append("Down now (oldest first):\n" + "\n".join(
-                f"{_line(d)}\n    since {ist(d.get('downSince'))} ({'at least ' if not d.get('downSinceExact') else ''}"
-                f"{duration(d.get('downHours'))})" for d in down))
+            parts.append(("table", "Down now (oldest first)", [(d, "DOWN", _since(d, "")) for d in down], "Down Since"))
         if went:
-            parts.append("Went down since the last report:\n" + "\n".join(f"- {c['name']} ({c['ip']}) at {ist(c['at'])}" for c in went))
+            parts.append(("table", "Went down since the last report", [(c, "DOWN", ist(c["at"])) for c in went], "Went Down At"))
         if back:
-            parts.append("Came back since the last report:\n" + "\n".join(
-                f"- {c['name']} ({c['ip']}) at {ist(c['at'])}, after {duration(c.get('hours'))}" for c in back))
+            parts.append(("table", "Came back since the last report",
+                          [(c, "UP", f"{ist(c['at'])} (down {duration(c.get('hours'))})") for c in back], "Back Up At"))
         if held:
-            parts.append(f"{held} urgent email(s) were held back because of the hourly limit; the details are above.")
-        m.add(site, "daily", f"[CCTV] {site} daily report - {len(down)} down", "\n\n".join(parts))
+            parts.append(("p", f"{held} urgent email(s) were held back because of the hourly limit; the details are above."))
+        m.add(site, "daily", f"[CCTV] {site} daily report - {len(down)} down", parts)
     st["changes"], st["held"] = {}, {}
     st["digestLast"] = today
     # System email to the team: once a day, with the reports.
@@ -368,7 +467,7 @@ def _daily(cc, st, m, by_site, now, email_cfg, snap):
                       + "\n".join(f"- {p['tab']} row {p['row'] or '-'}: {p['issue']}" + (f" ({p['text']})" if p.get("text") else "")
                                   for p in probs[:50]))
     if issues:
-        m.add("", "system", "[CCTV] Monitoring problems to fix", "\n\n".join(issues))
+        m.add("", "system", "[CCTV] Monitoring problems to fix", [("p", x) for x in issues])
 
 
 def on_failure(cfg, store, error, now=None, send=None):
@@ -382,10 +481,10 @@ def on_failure(cfg, store, error, now=None, send=None):
     elif now - first >= timedelta(hours=1) and st.get("failureMailDay") != now.astimezone(IST).strftime("%Y-%m-%d") \
             and st.get("mode") in ("test", "on"):
         m = Mailer(cfg, {"mode": st["mode"], "sites": {}}, now, st)
-        m.add("", "system", "[CCTV] Monitoring has stopped checking",
-              f"The CCTV collector has failed every round since {ist(_iso(first))}:\n\n{error}\n\n"
-              "The dashboard shows old data until this is fixed. See C:\\netmon\\data\\logs\\netmon-serve.log on the "
-              "collector host.")
+        m.add("", "system", "[CCTV] Monitoring has stopped checking", [
+            ("p", f"The CCTV collector has failed every round since {ist(_iso(first))}:"), ("p", str(error)),
+            ("p", "The dashboard shows old data until this is fixed. See C:\\netmon\\data\\logs\\netmon-serve.log on the "
+                  "collector host.")])
         st["outbox"] += m.messages
         st["failureMailDay"] = now.astimezone(IST).strftime("%Y-%m-%d")
     _flush(cfg, st, now, send)
@@ -413,6 +512,8 @@ def build_message(cc, item):
     msg["Auto-Submitted"] = "auto-generated"
     msg["X-Netmon-Kind"] = item["kind"]
     msg.set_content(item["body"])
+    if item.get("html"):  # messages queued before the HTML layout have text only
+        msg.add_alternative(item["html"], subtype="html")
     return msg
 
 

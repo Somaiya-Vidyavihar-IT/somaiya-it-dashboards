@@ -24,6 +24,14 @@ def make_cfg(data_dir, **extra):
                             "subnets": [{"cidr": "192.0.2.0/24"}], "cctv": cc})
 
 
+def text(msg):
+    return msg.get_body(("plain",)).get_content()
+
+
+def html_part(msg):
+    return msg.get_body(("html",)).get_content()
+
+
 def dev(ip, kind="camera", tab="Lab", nvr="Lab NVR (192.0.2.1)", name=None):
     return {"ip": ip, "kind": kind, "tab": tab, "name": name or f"{tab} {kind} {ip}", "nvr": None if kind == "nvr" else nvr}
 
@@ -129,8 +137,8 @@ class Rules(Base):
         self.assertEqual(m["To"], "spoc@somaiya.edu")
         self.assertEqual(m["Cc"], "cc1@somaiya.edu, partner@example.com, net@somaiya.edu", "partner gets full mails")
         self.assertNotIn("head@somaiya.edu", m["Cc"], "escalation contacts only get escalations")
-        self.assertIn("192.0.2.1", m.get_content())
-        self.assertIn("10 listed under it", m.get_content())
+        self.assertIn("192.0.2.1", text(m))
+        self.assertIn("10 listed under it", text(m))
         self.world.set_down("192.0.2.1", t + timedelta(minutes=5))
         self.round(t + timedelta(minutes=5))
         self.assertEqual(len(self.sent), 1, "never twice for the same outage")
@@ -161,7 +169,7 @@ class Rules(Base):
         morning = T0 + timedelta(hours=23, minutes=35)  # next day 09:05 IST
         self.round(morning)
         self.assertEqual(self.kinds(), ["daily"], "only Lab has something to report")
-        body = self.sent[0].get_content()
+        body = text(self.sent[0])
         self.assertIn("1 down now, 1 went down", body)
         self.assertEqual(self.sent[0]["To"], "spoc@somaiya.edu")
         self.assertNotIn("net@somaiya.edu", self.sent[0]["Cc"] or "", "the team is not copied on daily reports")
@@ -195,7 +203,7 @@ class SwitchAndDelivery(Base):
         m = self.sent[0]
         self.assertEqual((m["To"], m["Cc"]), ("net@somaiya.edu", None))
         self.assertTrue(m["Subject"].startswith("[TEST] [CCTV] Lab: NVR down"))
-        self.assertIn("To: spoc@somaiya.edu", m.get_content())
+        self.assertIn("To: spoc@somaiya.edu", text(m))
 
     def test_off_sends_nothing_and_does_not_flood_when_switched_on(self):
         off = [["Emails", "Off"]] + EMAIL_ROWS[1:]
@@ -231,7 +239,7 @@ class SwitchAndDelivery(Base):
         self.round(t)
         self.assertEqual(self.kinds(), ["nvr-down"])
         self.round(T0 + timedelta(hours=23, minutes=35))
-        self.assertIn("held back", self.sent[-1].get_content())
+        self.assertIn("held back", text(self.sent[-1]))
 
     def test_subject_cannot_carry_extra_headers(self):
         self.world.devs["192.0.2.1"]["name"] = "Lab NVR\r\nBcc: attacker@example.com"
@@ -251,6 +259,46 @@ class SwitchAndDelivery(Base):
         self.assertEqual(self.kinds(), ["system"])
         self.assertIn("stopped checking", self.sent[0]["Subject"])
         self.assertEqual(self.sent[0]["To"], "net@somaiya.edu")
+
+
+class Layout(Base):
+    def test_html_follows_the_network_team_alert_layout(self):
+        self.round(T0)
+        t = T0 + timedelta(minutes=5)
+        self.world.set_down("192.0.2.1", t)
+        self.world.set_down("192.0.2.1", t)
+        self.round(t)
+        m = self.sent[0]
+        self.assertEqual(m.get_content_type(), "multipart/alternative")
+        h = html_part(m)
+        for piece in ("Dear Lab IT Team,", "<th", "Device Type", "IP Address", "Location", "Status", "Down Since",
+                      "192.0.2.1", ">NVR</span>", "color:#ee1c24;font-weight:bold\">DOWN", "Best Wishes,",
+                      "university-logo.png"):
+            self.assertIn(piece, h)
+        self.assertIn("Dear Lab IT Team,", text(m))
+        self.world.set_up("192.0.2.1")
+        self.round(t + timedelta(minutes=30))
+        self.assertIn("color:#1a7f37;font-weight:bold\">UP", html_part(self.sent[1]))
+
+    def test_sheet_text_is_escaped_and_test_banner_shown(self):
+        self.world.devs["192.0.2.12"]["name"] = "Gate <script>alert(1)</script> & lobby"
+        rows = [["Emails", "Test"]] + EMAIL_ROWS[1:]
+        self.round(T0, rows)
+        self.world.set_down("192.0.2.12", T0 + timedelta(hours=1))
+        self.round(T0 + timedelta(hours=1), rows)
+        self.round(T0 + timedelta(hours=23, minutes=35), rows)
+        h = html_part(self.sent[-1])
+        self.assertNotIn("<script>", h)
+        self.assertIn("Gate &lt;script&gt;alert(1)&lt;/script&gt; &amp; lobby", h)
+        self.assertIn("TEST MODE", h)
+        self.assertIn("To: spoc@somaiya.edu", h)
+        self.assertIn("NVR: Lab NVR (192.0.2.1)", h)
+
+    def test_old_outbox_items_without_html_still_send(self):
+        msg = cctv_mail.build_message(self.cfg["cctv"], {"id": "<x@somaiya.edu>", "kind": "daily", "to": ["a@somaiya.edu"],
+                                                         "cc": [], "subject": "s", "body": "plain only"})
+        self.assertEqual((msg.get_content_type(), msg.get_content().strip()), ("text/plain", "plain only"))
+
 
 
 class PollIntegration(Base):

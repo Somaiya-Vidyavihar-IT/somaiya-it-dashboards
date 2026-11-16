@@ -141,17 +141,24 @@ def main(argv=None):
 
 def _cctv_mail_test(cfg, to):
     from datetime import datetime, timezone
-    from .cctv_mail import EMAIL_RE, build_message, smtp_sender
+    from .cctv_mail import EMAIL_RE, build_message, render_html, render_text, smtp_sender
     cc = cfg["cctv"]
     if not EMAIL_RE.fullmatch(to):
         raise SystemExit(f"{to!r} is not one email address")
+    sections = [
+        ("p", "This is a test from the CCTV monitoring collector. Sent via "
+              f"{cc['smtp_host']}:{cc['smtp_port']} as {cc['mail_from']}"
+              + (f" (login {cc['smtp_username']})" if cc["smtp_username"] else " (relay, no login)")
+              + ". If you can read this, the mail settings work. The CCTV email switch is in the sheet's "
+              + cc["email_config_tab"] + " tab. The table below is a SAMPLE of the layout, not real devices."),
+        ("table", "Sample", [({"kind": "nvr", "ip": "192.0.2.1", "name": "SAMPLE Server room NVR"}, "DOWN",
+                              "16 Nov 2026, 10:05 IST (25 min)"),
+                             ({"kind": "camera", "ip": "192.0.2.15", "name": "SAMPLE Main gate camera",
+                               "nvr": "SAMPLE Server room NVR (192.0.2.1)"}, "UP", "16 Nov 2026, 11:40 IST (down 2 h 5 min)")],
+         "Down Since / Back Up At")]
     item = {"id": f"<cctv-test-{int(datetime.now(timezone.utc).timestamp())}@{cc['mail_from'].split('@')[-1]}>",
             "kind": "test", "site": "", "to": [to], "cc": [], "subject": "[CCTV] Test email from the monitoring collector",
-            "body": "This is a test from the CCTV monitoring collector.\n"
-                    f"Sent via {cc['smtp_host']}:{cc['smtp_port']} as {cc['mail_from']}"
-                    + (f" (login {cc['smtp_username']})" if cc["smtp_username"] else " (relay, no login)")
-                    + ".\nIf you can read this, the mail settings work. The CCTV email switch is in the sheet's "
-                    + cc["email_config_tab"] + " tab."}
+            "body": render_text("Dear IT Network Team,", sections), "html": render_html(cc, "Dear IT Network Team,", sections)}
     try:
         smtp_sender(cfg)([build_message(cc, item)])
     except Exception as exc:
