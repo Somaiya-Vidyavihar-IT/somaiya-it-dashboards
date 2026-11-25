@@ -14,6 +14,7 @@ Nothing here writes to devices. Every command is asserted at import time to star
 |---|---|---|
 | `netmon-full-run` | 08:00 and 16:30 IST | `python -m netmon run` |
 | `netmon-reach` | every 15 minutes | `python -m netmon reach` (TCP/22 to known switches and WLCs, no login) |
+| `netmon-uplinks` | every 10 minutes (stopped after 9) | `python -m netmon uplinks` (outgoing load of uplink ports; read-only `show` commands) |
 | `netmon-api` | at startup, auto-restart | `python -m netmon serve` |
 | Run now (dashboard) | on demand, IT Network Team | same as the full run; one run at a time |
 | CCTV: SolarWinds read | every `cctv.poll_minutes` (5) inside `netmon-api`, and on demand | `python -m netmon cctv` runs one read by hand |
@@ -26,6 +27,14 @@ Nothing here writes to devices. Every command is asserted at import time to star
 **IP phones that look like switches.** Some phones advertise the LLDP "bridge" capability, so they look like switches. Neighbours named or described as one of `collector.phone_models` (default `["X1SG", "X301G", "X3SG"]`, Fanvil models seen on campus) are treated as phones: never probed on tcp/22, never logged in to, never listed as switches. Add a model to the list in `config.toml` when another one turns up.
 
 **Campus IP scan (Cisco only).** Every address of the subnets with `sweep = true` is probed on tcp 22, 443 and 80 (`collector.scan_ports`). Seeds, last run's switches and known switches are logged in to as before. Any other host gets the switch credential sets only if it identifies as Cisco: its SSH banner (read on connect; nothing is sent) matches `collector.cisco_ssh_banners`, or one unauthenticated `GET /` (HTTPS then HTTP, certificate not checked, 64 KB read) returns a page title or `Server` header matching `collector.cisco_web_patterns`. Non-Cisco hosts are only counted. Cisco hosts with a web page but no SSH are listed on the Discovery tab ("Cisco web UI only (no SSH)"); the collector never logs in to web pages. Switches reported by CDP/LLDP neighbours are read without this check. Write the patterns from real data: `C:\netmon\netmon fingerprint` reads the banner and web title of every collected switch, per model, without logging in, and saves `data\fingerprint.txt` (internal: keep it out of git).
+
+**Neighbour issues.** The "Neighbour issues" tab lists switches whose CDP/LLDP command failed, was rejected, fell back from the template, or returned no neighbours, so a switch that hides the links behind it is easy to spot.
+
+**Known switches, Not answering, Down, Remove.** Every switch the collector has read is remembered in `data\state\known-switches.json` (last-known inventory and uplinks). A known switch that does not answer is shown as "Not answering", and as "Down" after 2 consecutive failed reachability checks (the 15-minute check or a run's own probe). Down rows stay until a network team member presses **Remove** on the page (`POST /api/v1/forget`, or `C:\netmon\netmon forget --ip 10.0.0.5` by hand; Down rows only). A switch that answers again shows "Answering again (read at the next full run)".
+
+**Uplink load (`netmon-uplinks`).** `C:\netmon\netmon uplinks` reads the outgoing rate of every uplink port (output rate against the port's bandwidth; a port-channel is shown as the bundle plus its member ports) and writes `data\uplinks.json`. Core and distribution switches are read every 10 minutes, other switches when their last reading is 30 minutes old or more. Only the credential set that last worked for that switch is tried (no failed-login attempts added). An uplink at 75 % or more outgoing raises an alert at the first reading and clears when it drops below 75 %. SG / CBS / C1300 switches show "Not read yet (command to be confirmed)" until the exact command has been checked against a capture of a CBS350 and a C1300. The page shows this on the "Uplink load" tab, an Overview tile and rows in the switch dialog.
+
+**API:** `GET /api/v1/uplinks` returns that file (`{}` before the first round); `POST /api/v1/forget` (body `{"ip": "10.0.0.5"}`) removes a Down switch. Both are for the network team only; the forget request is written to `audit.log`. `API_VERSION` is 4.
 
 **No SSH from the collector.** A neighbour switch whose management IP is in a configured subnet but does not answer tcp/22 from the collector is listed as its own switch (state "No SSH from collector", linked under the switch that sees it, with a `no-ssh` warning finding) instead of only an info finding. The 15-minute check skips it. Reconnect on it checks tcp/22 first and logs in only if it now answers; the switches behind it are crawled by the next full run. Output goes to `data\refresh.log`; the result to `data\refresh-status.json`.
 
@@ -69,7 +78,20 @@ A plain-language, step-by-step guide for the network team is kept in the network
     .\install-tasks.ps1 -ServiceAccount '<VM_NAME>\svc-netmon'
     curl.exe -k https://localhost:8443/api/v1/health
     ```
+    `install-tasks.ps1` registers `netmon-full-run`, `netmon-reach`, `netmon-uplinks` and `netmon-api`. When updating an older install, re-run it elevated so `netmon-uplinks` is created, and restart `netmon-api`.
 11. **Hub.** Set `netmonApiBase` in `site/config.js` to `https://netmon.somaiya.edu:8443` and publish (`dev` first).
+
+### Commands added in this release
+
+```powershell
+C:\netmon\netmon fingerprint                  # read-only: SSH banner + web title of every collected switch model -> data\fingerprint.txt
+C:\netmon\netmon uplinks                      # one uplink load round (the netmon-uplinks task runs this)
+C:\netmon\netmon forget --ip 10.0.0.5         # remove a Down switch (example address); the page's Remove button does the same
+```
+
+Run `fingerprint` once after updating and before trusting the scan. If Nexus, SG, CBS or C1300 switches do not match the default Cisco patterns, add patterns to `cisco_ssh_banners` / `cisco_web_patterns` in `C:\netmon\config.toml`.
+
+New `[collector]` settings (all optional; defaults shown): `poe_threshold = 75` (percent of PoE budget), `uplink_threshold = 75`, `uplink_fast_minutes = 10`, `uplink_slow_minutes = 30`, `uplink_workers = 16`, `scan_ports = [22, 443, 80]`, `cisco_ssh_banners = ["(?i)cisco"]`, `cisco_web_patterns = ["(?i)cisco"]`. The scan needs the collector host to be allowed tcp 22, 80 and 443 to every subnet with `sweep = true`; allow this before the first run.
 
 ### Credential sets
 
