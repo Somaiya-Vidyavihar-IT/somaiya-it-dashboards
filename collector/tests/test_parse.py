@@ -303,5 +303,43 @@ class TextFsmNormalisers(unittest.TestCase):
         self.assertEqual([(r["port"], r["oper"], r["powerW"]) for r in rows], [("Gi1/0/1", "on", 15.4), ("Gi1/0/2", "off", 0.0)])
 
 
+class UplinkParsers(unittest.TestCase):
+    def test_ios_interface_rate(self):
+        self.assertEqual(parse.interface_rate("cisco_ios", fx.IOS_SHOW_INTERFACE),
+                         {"outBps": 412345000, "bwKbps": 1000000, "interval": "5 minute"})
+
+    def test_nxos_interface_rate(self):
+        # The first load interval (30 seconds) is the one used; its bits/sec line, not the rounded Gbps one.
+        self.assertEqual(parse.interface_rate("cisco_nxos", fx.NXOS_SHOW_INTERFACE),
+                         {"outBps": 7700000000, "bwKbps": 10000000, "interval": "30 seconds"})
+        self.assertEqual(parse.interface_rate("cisco_nxos", fx.NXOS_SHOW_INTERFACE_BPS_ONLY),
+                         {"outBps": 2500000000, "bwKbps": 10000000, "interval": ""})
+        self.assertEqual(parse.interface_rate("cisco_ios", ""), {"outBps": None, "bwKbps": None, "interval": ""})
+
+    def test_rate_without_bandwidth_is_not_read(self):
+        """Review Focus 3: no BW (or BW 0) means no percentage and no alert, never a division error."""
+        from netmon import uplinks
+        rate = parse.interface_rate("cisco_ios", fx.IOS_SHOW_INTERFACE_NO_BW)
+        self.assertEqual((rate["outBps"], rate["bwKbps"]), (2000, None))
+        r = uplinks.reading(rate, 75)
+        self.assertEqual((r["outPct"], r["state"], r["alert"], r["bwMbps"]), (None, "not-read", False, None))
+        zero = parse.interface_rate("cisco_ios", fx.IOS_SHOW_INTERFACE.replace("BW 1000000 Kbit", "BW 0 Kbit"))
+        self.assertEqual(zero["bwKbps"], 0)
+        r = uplinks.reading(zero, 75)
+        self.assertEqual((r["outPct"], r["state"], r["alert"]), (None, "not-read", False))
+        self.assertTrue(r["detail"])
+        ok = uplinks.reading(parse.interface_rate("cisco_ios", fx.IOS_SHOW_INTERFACE), 75)
+        self.assertEqual((ok["outPct"], ok["state"], ok["alert"], ok["bwMbps"]), (41.2, "ok", False, 1000))
+
+    def test_ios_etherchannel_members(self):
+        self.assertEqual(parse.port_channels("cisco_ios", fx.IOS_ETHERCHANNEL_SUMMARY),
+                         {"Po1": ["Gi1/0/49", "Gi1/0/50"], "Po2": ["Te1/1/1", "Te1/1/2", "Te1/1/3", "Te1/1/4"]})
+        self.assertEqual(parse.port_channels("cisco_ios", "% Invalid input detected at '^' marker."), {})
+
+    def test_nxos_port_channel_members(self):
+        self.assertEqual(parse.port_channels("cisco_nxos", fx.NXOS_PORT_CHANNEL_SUMMARY),
+                         {"Po10": ["Eth1/49", "Eth1/50"], "Po20": ["Eth1/51", "Eth1/52", "Eth1/53"]})
+
+
 if __name__ == "__main__":
     unittest.main()

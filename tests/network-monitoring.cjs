@@ -132,6 +132,42 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const ssh=harness(API,(p,m)=>p==='/api/v1/status'?running('ssh'):p==='/api/v1/progress'?{status:200,body:{startedAt,finishedAt:null,phase:'ssh',sweepDone:12000,sweepTotal:12000,scan:scanned.scan,items:[{ip:'10.0.2.1',kind:'switch',hostname:'',state:'waiting',source:'IP scan (Cisco)',at:startedAt}]}}:team(p,m));await ssh.connect();
   assert.ok(ssh.el('progress-summary').textContent.includes('Scan: 4 new Cisco with SSH · 1 Cisco web UI only · 22 non-Cisco skipped'),ssh.el('progress-summary').textContent);
   assert.ok(ssh.el('progress-rows').innerHTML.includes('IP scan (Cisco)'));}
+ // Uplink load (10-minute task): own tab, Overview tile, rows in the switch dialog; an API without the endpoint (404) is "no data yet".
+ {assert.ok(h.calls.some(c=>c.url===API+'/api/v1/uplinks'&&c.auth==='Bearer fixture-token'),'Uplink load is read from the API');
+  assert.ok(h.el('up-rows').innerHTML.includes('No uplink readings yet'),'404 from an older API: empty state');assert.ok(!h.el('data-note').classList.contains('error-note'),'and no error');
+  assert.ok(h.el('stats').innerHTML.includes('UPLINKS ≥75% OUT</span><strong>—</strong>'),'Overview tile without readings');
+  const R='2026-11-05T03:10:00Z',row=(o)=>({institute:'Engineering',role:'distribution',kind:'port',bundle:'',neighbor:'core-01',bwMbps:1000,outBps:null,outPct:null,interval:'5 minute',readAt:R,state:'ok',detail:'',alert:false,...o});
+  const up={checkedAt:R,threshold:75,ports:[
+   row({ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',port:'Te1/1/4',neighbor:'core-<b>01</b>',bwMbps:10000,outBps:1200000000,outPct:12}),
+   row({ip:'10.0.1.2',hostname:'asw-02',role:'access',port:'Gi49',neighbor:'dsw-01',bwMbps:null,interval:'',state:'not-read',detail:'Not read yet (command to be confirmed)'}),
+   row({ip:'10.0.0.1',hostname:'core-01',institute:'DC',role:'core',port:'Eth1/49',kind:'member',bundle:'Po10',neighbor:'dsw-01',bwMbps:10000,outBps:8000000000,outPct:80,interval:'30 seconds',alert:true}),
+   row({ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',port:'Te1/1/3',bwMbps:null,state:'failed',detail:'SSH timed out <b>x</b>'}),
+   row({ip:'10.0.0.1',hostname:'core-01',institute:'DC',role:'core',port:'Po10',kind:'bundle',bundle:'Po10',neighbor:'dsw-01',bwMbps:20000,outBps:16400000000,outPct:82,interval:'30 seconds',alert:true})]};
+  let upBody=up;const u=harness(API,(p,m)=>p==='/api/v1/uplinks'?{status:200,body:upBody}:team(p,m));await u.connect();
+  const rows=u.el('up-rows').innerHTML,at=s=>rows.indexOf(s);
+  assert.ok(at('>Po10<')<at('>Eth1/49<')&&at('>Eth1/49<')<at('>Te1/1/4<')&&at('>Te1/1/4<')<at('>Te1/1/3<')&&at('>Te1/1/3<')<at('>Gi49<'),'Sorted by outgoing load, highest first; unread rows last');
+  assert.equal((rows.match(/<tr class="alert-row">/g)||[]).length,2,'Alert rows are highlighted');
+  assert.ok(rows.includes('82%')&&rows.includes('16.4 Gb/s')&&rows.includes('20 Gb/s')&&rows.includes('Member of Po10')&&rows.includes('Bundle'),'Load, rate, link speed, bundle and member');
+  assert.ok(rows.includes('Not read yet (command to be confirmed)')&&rows.includes('Not read')&&rows.includes('Failed'),'Not read and failed rows say why');
+  assert.ok(rows.includes('dsw-&lt;img')&&rows.includes('core-&lt;b&gt;01')&&rows.includes('SSH timed out &lt;b&gt;x')&&!rows.includes('<img')&&!rows.includes('<b>'),'Switch text is escaped');
+  assert.ok(rows.includes('data-ip="10.0.0.1"')&&!rows.includes('data-ip="10.0.1.2"'),'Switches in the snapshot open their details');
+  assert.ok(u.el('up-count').textContent.startsWith('5 of 5 uplink ports · 2 at or over 75% out'),u.el('up-count').textContent);
+  assert.ok(u.el('up-note').textContent.includes('every 10 minutes')&&u.el('up-note').textContent.includes('05 Nov 2026, 08:40 IST'));
+  vm.runInContext("document.getElementById('up-show').value='alert';renderUplinks()",u.ctx);assert.ok(u.el('up-count').textContent.startsWith('2 of 5'),'Alerts only');assert.ok(!u.el('up-rows').innerHTML.includes('Te1/1/4'));
+  vm.runInContext("document.getElementById('up-show').value='';document.getElementById('up-inst').value='DC';renderUplinks()",u.ctx);assert.ok(u.el('up-count').textContent.startsWith('2 of 5'),'Filter by institute');
+  vm.runInContext("document.getElementById('up-inst').value='';document.getElementById('up-role').value='access';renderUplinks()",u.ctx);assert.ok(u.el('up-count').textContent.startsWith('1 of 5'),'Filter by role');
+  vm.runInContext("document.getElementById('up-show').value='alert';renderUplinks()",u.ctx);assert.ok(u.el('up-rows').innerHTML.includes('No uplinks match these filters'));
+  vm.runInContext("document.getElementById('up-show').value='';document.getElementById('up-role').value='';renderUplinks()",u.ctx);
+  const st=u.el('stats').innerHTML;assert.ok(st.includes('UPLINKS ≥75% OUT</span><strong>2</strong>')&&st.includes('data-go="uplinks"'),'Overview tile counts the alerts and opens the tab');
+  vm.runInContext("setView('uplinks')",u.ctx);assert.equal(u.el('uplinks-view').classList.contains('hidden'),false);
+  vm.runInContext("openDevice('10.0.0.1')",u.ctx);{const b=u.el('detail-body').innerHTML,t=b.slice(b.indexOf('Uplink load (2)'));const sec=t.slice(0,t.indexOf('</table>'));assert.ok(sec&&sec.includes('Po10')&&sec.includes('Eth1/49')&&sec.includes('82%')&&sec.includes('alert-row')&&!sec.includes('Te1/1/'),'The dialog lists this switch\'s uplinks only');}
+  vm.runInContext("openDevice('10.0.9.1')",u.ctx);assert.ok(!u.el('detail-body').innerHTML.includes('Uplink load'),'No uplink section without readings');
+  const n=()=>u.calls.filter(c=>c.url===API+'/api/v1/uplinks').length,before=n();
+  await vm.runInContext('loadAll()',u.ctx);assert.equal(n(),before,'Not re-read on every 5-second poll');
+  upBody={};await vm.runInContext('loadAll(true)',u.ctx);assert.equal(n(),before+1,'Re-read on Refresh');
+  assert.ok(u.el('up-rows').innerHTML.includes('No uplink readings yet'),'Empty file: empty state');assert.ok(u.el('stats').innerHTML.includes('UPLINKS ≥75% OUT</span><strong>—</strong>'));
+  upBody=up;await vm.runInContext('loadAll(true)',u.ctx);assert.ok(u.el('up-rows').innerHTML.includes('Po10'));
+  vm.runInContext('disconnectGoogle()',u.ctx);assert.ok(!u.el('up-rows').innerHTML.includes('Po10'),'Disconnect clears uplink data');}
  // A neighbour switch that does not answer SSH from the collector gets its own row.
  {const n=harness(API,team);await n.connect();
   assert.ok(n.el('sw-rows').innerHTML.includes('HOSTEL_DIST_SW')&&n.el('sw-rows').innerHTML.includes('No SSH from collector'),'No-SSH switches are listed');
@@ -255,5 +291,5 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
- console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, campus scan and Cisco web UI list, single-switch refresh, Down switches and Remove, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
+ console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, campus scan and Cisco web UI list, uplink load, single-switch refresh, Down switches and Remove, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,5 +1,5 @@
 # Registers the netmon scheduled tasks on the collector host. Run in an elevated PowerShell.
-# Review before running: it creates three tasks that run as the given service account.
+# Review before running: it creates four tasks that run as the given service account.
 #
 #   .\install-tasks.ps1 -ServiceAccount 'CAMPUS\svc-netmon' -AppDir 'C:\netmon\app\collector' `
 #       -Python 'C:\netmon\venv\Scripts\python.exe' -Config 'C:\netmon\config.toml'
@@ -7,6 +7,7 @@
 # Tasks:
 #   netmon-full-run   08:00 and 16:30 daily  -> python -m netmon run
 #   netmon-reach      every 15 minutes       -> python -m netmon reach
+#   netmon-uplinks    every 10 minutes       -> python -m netmon uplinks
 #   netmon-api        at startup, restarts   -> python -m netmon serve
 param(
   [Parameter(Mandatory)] [string] $ServiceAccount,
@@ -81,12 +82,19 @@ $reachSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInsta
 Register-ScheduledTask -TaskName 'netmon-reach' -Action (New-NetmonAction 'reach') -Trigger $reachTrigger -Settings $reachSettings `
   -User $ServiceAccount -Password $pw -RunLevel Limited -Description 'TCP/22 up/down check of known switches every 15 minutes' -Force | Out-Null
 
+# Uplink load: core/distribution every round, other switches every 30 minutes (read-only show commands).
+# Stopped after 9 minutes so a slow round never overlaps the next one.
+$uplinkTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 10)
+$uplinkSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 9)
+Register-ScheduledTask -TaskName 'netmon-uplinks' -Action (New-NetmonAction 'uplinks') -Trigger $uplinkTrigger -Settings $uplinkSettings `
+  -User $ServiceAccount -Password $pw -RunLevel Limited -Description 'Outgoing load of switch uplink ports every 10 minutes (alert at 75%)' -Force | Out-Null
+
 $apiSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName 'netmon-api' -Action (New-NetmonAction 'serve') -Trigger (New-ScheduledTaskTrigger -AtStartup) -Settings $apiSettings `
   -User $ServiceAccount -Password $pw -RunLevel Limited -Description 'Campus-only HTTPS API for the hub Network Monitoring page' -Force | Out-Null
 
-Write-Host 'Registered netmon-full-run, netmon-reach and netmon-api.'
+Write-Host 'Registered netmon-full-run, netmon-reach, netmon-uplinks and netmon-api.'
 
 # Proof that Windows really launches tasks as this account: start the API and look at LastRunTime.
 # A task that never ran keeps LastRunTime in 1999 and LastTaskResult 267011.

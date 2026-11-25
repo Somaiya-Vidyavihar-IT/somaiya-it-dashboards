@@ -2,6 +2,7 @@
 
   python -m netmon [--config PATH] run [--trigger scheduled|manual] [--by EMAIL]
   python -m netmon [--config PATH] reach
+  python -m netmon [--config PATH] uplinks
   python -m netmon [--config PATH] refresh --ip 10.0.0.1 [--by EMAIL]
   python -m netmon [--config PATH] forget --ip 10.0.0.1 [--by EMAIL]
   python -m netmon [--config PATH] serve [--dev-http]
@@ -31,6 +32,7 @@ def main(argv=None):
     r.add_argument("--trigger", default="scheduled", choices=["scheduled", "manual"])
     r.add_argument("--by", default="")
     sub.add_parser("reach", help="15-minute TCP/22 reachability check")
+    sub.add_parser("uplinks", help="10-minute uplink load check (outgoing rate of switch uplink ports)")
     f = sub.add_parser("refresh", help="re-read one switch from the last full run and rebuild the snapshot")
     f.add_argument("--ip", required=True)
     f.add_argument("--by", default="")
@@ -91,6 +93,9 @@ def main(argv=None):
     if args.cmd == "reach":
         from .run import reach_run
         return reach_run(cfg)
+    if args.cmd == "uplinks":
+        from .uplinks import poll
+        return poll(cfg)
     if args.cmd == "cctv-mail-test":
         return _cctv_mail_test(cfg, args.to)
     if args.cmd == "cctv":

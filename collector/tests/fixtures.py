@@ -420,3 +420,93 @@ Platform: Cisco SG300-28 (PID:SRW2024-K9)-VSD, Capabilities: Switch IGMP
 Interface: Ethernet1/9, Port ID (outgoing port): gi28
 Holdtime: 120 sec
 """
+
+# ---- uplink load (invented output in the IOS / NX-OS layouts) ----
+
+IOS_SHOW_INTERFACE = """GigabitEthernet1/0/49 is up, line protocol is up (connected)
+  Hardware is Gigabit Ethernet, address is 00aa.bb00.0049 (bia 00aa.bb00.0049)
+  Description: UPLINK TO DSW-TEST-01
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec,
+     reliability 255/255, txload 105/255, rxload 3/255
+  Encapsulation ARPA, loopback not set
+  Full-duplex, 1000Mb/s, media type is 1000BaseSX SFP
+  input flow-control is on, output flow-control is unsupported
+  Last input 00:00:01, output 00:00:00, output hang never
+  Queueing strategy: fifo
+  5 minute input rate 12345000 bits/sec, 2100 packets/sec
+  5 minute output rate 412345000 bits/sec, 36000 packets/sec
+     123456789 packets input, 98765432100 bytes, 0 no buffer
+     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
+     234567890 packets output, 198765432100 bytes, 0 underruns
+"""
+
+NXOS_SHOW_INTERFACE = """Ethernet1/49 is up
+admin state is up, Dedicated Interface
+  Belongs to Po10
+  Hardware: 1000/10000/25000 Ethernet, address: 00aa.bb00.1049 (bia 00aa.bb00.1049)
+  Description: TO-DSW-TEST-02
+  MTU 1500 bytes, BW 10000000 Kbit , DLY 10 usec
+  reliability 255/255, txload 196/255, rxload 1/255
+  full-duplex, 10 Gb/s, media type is 10G
+  Load-Interval #1: 30 seconds
+    30 seconds input rate 4567000 bits/sec, 800 packets/sec
+    30 seconds output rate 7700000000 bits/sec, 640000 packets/sec
+    input rate 4.57 Mbps, 800 pps; output rate 7.70 Gbps, 640.00 Kpps
+  Load-Interval #2: 5 minute (300 seconds)
+    300 seconds input rate 3456000 bits/sec, 700 packets/sec
+    300 seconds output rate 6600000000 bits/sec, 550000 packets/sec
+    input rate 3.46 Mbps, 700 pps; output rate 6.60 Gbps, 550.00 Kpps
+"""
+
+NXOS_SHOW_INTERFACE_BPS_ONLY = """Ethernet1/50 is up
+  MTU 1500 bytes, BW 10000000 Kbit , DLY 10 usec
+  Load-Interval #2: 5 minute (300 seconds)
+    input rate 1.20 Mbps, 300 pps; output rate 2.50 Gbps, 210.00 Kpps
+"""
+
+IOS_SHOW_INTERFACE_NO_BW = """GigabitEthernet1/0/50 is up, line protocol is up (connected)
+  Hardware is Gigabit Ethernet, address is 00aa.bb00.0050 (bia 00aa.bb00.0050)
+  5 minute input rate 1000 bits/sec, 1 packets/sec
+  5 minute output rate 2000 bits/sec, 2 packets/sec
+"""
+
+IOS_ETHERCHANNEL_SUMMARY = """Flags:  D - down        P - bundled in port-channel
+        I - stand-alone s - suspended
+        H - Hot-standby (LACP only)
+        R - Layer3      S - Layer2
+        U - in use      f - failed to allocate aggregator
+
+        M - not in use, minimum links not met
+        u - unsuitable for bundling
+        w - waiting to be aggregated
+        d - default port
+
+        A - formed by Auto LAG
+
+
+Number of channel-groups in use: 2
+Number of aggregators:           2
+
+Group  Port-channel  Protocol    Ports
+------+-------------+-----------+-----------------------------------------------
+1      Po1(SU)         LACP      Gi1/0/49(P)     Gi1/0/50(P)
+2      Po2(SU)         LACP      Te1/1/1(P)      Te1/1/2(P)      Te1/1/3(D)
+                                 Te1/1/4(P)
+"""
+
+NXOS_PORT_CHANNEL_SUMMARY = """Flags:  D - Down        P - Up in port-channel (members)
+        I - Individual  H - Hot-standby (LACP only)
+        s - Suspended   r - Module-removed
+        b - BFD Session Wait
+        S - Switched    R - Routed
+        U - Up (port-channel)
+        p - Up in delay-lacp mode (member)
+        M - Not in use. Min-links not met
+--------------------------------------------------------------------------------
+Group Port-       Type     Protocol  Member Ports
+      Channel
+--------------------------------------------------------------------------------
+10    Po10(SU)    Eth      LACP      Eth1/49(P)   Eth1/50(P)
+20    Po20(SU)    Eth      LACP      Ethernet1/51(P)   Eth1/52(D)
+                                     Eth1/53(P)
+"""

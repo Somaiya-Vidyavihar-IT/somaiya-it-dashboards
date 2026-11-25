@@ -126,6 +126,21 @@ class ApiEndToEnd(unittest.TestCase):
         resp, body = self.req("GET", "/api/v1/progress", "good")
         self.assertEqual(json.loads(body)["items"][0]["state"], "running")
 
+    def test_uplinks_served_to_team_only(self):
+        self.assertEqual(self.req("GET", "/api/v1/uplinks")[0].status, 401)
+        self.assertEqual(self.req("GET", "/api/v1/uplinks", "outsider")[0].status, 403)
+        resp, body = self.req("GET", "/api/v1/uplinks", "good")
+        self.assertEqual((resp.status, json.loads(body)), (200, {}), "no uplinks.json yet: empty object, not an error")
+        data = {"checkedAt": "2026-11-25T04:00:00Z", "threshold": 75,
+                "ports": [{"ip": "10.0.0.1", "port": "Gi1/0/48", "outPct": 80.0, "alert": True}]}
+        self.store.write(data, "uplinks.json")
+        resp, body = self.req("GET", "/api/v1/uplinks", "good", extra={"Accept-Encoding": "gzip"})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(gzip.decompress(body)), data)
+        self.assertEqual(resp.getheader("Cache-Control"), "no-store")
+        resp, body = self.req("GET", "/api/v1/uplinks/", "good")
+        self.assertEqual(json.loads(body), data)
+
     def test_run_now_starts_once(self):
         self.assertEqual(self.req("POST", "/api/v1/run", "outsider")[0].status, 403)
         self.assertEqual(self.runs, [])

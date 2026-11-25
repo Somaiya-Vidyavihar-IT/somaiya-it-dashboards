@@ -457,6 +457,54 @@ def poe_ports_sx(text):
     return out
 
 
+RATE_UNITS = {"": 1, "k": 10 ** 3, "m": 10 ** 6, "g": 10 ** 9, "t": 10 ** 12}
+
+
+def interface_rate(platform, text):
+    """Outgoing rate and bandwidth of one port from 'show interface(s) <port>' (IOS / NX-OS).
+
+    IOS: 'BW 1000000 Kbit/sec' and '5 minute output rate 412345000 bits/sec'. NX-OS: 'BW 10000000 Kbit'
+    and, per load interval, '30 seconds output rate 7700000000 bits/sec' (the first interval is used),
+    else the rounded 'output rate 2.50 Gbps'. Missing values are None; BW 0 stays 0."""
+    t = text or ""
+    bw = re.search(r"\bBW\s+(\d+)\s*Kbit", t)
+    out = re.search(r"(\d+\s+(?:minutes?|seconds?))\s+output rate\s+(\d+)\s+bits/sec", t, re.I)
+    if out:
+        return {"outBps": int(out.group(2)), "bwKbps": int(bw.group(1)) if bw else None, "interval": out.group(1)}
+    out = re.search(r"\boutput rate\s+(\d+(?:\.\d+)?)\s*([kmgt]?)bps\b", t, re.I)
+    bps = round(float(out.group(1)) * RATE_UNITS[out.group(2).lower()]) if out else None
+    return {"outBps": bps, "bwKbps": int(bw.group(1)) if bw else None, "interval": ""}
+
+
+CHANNEL_PORT = re.compile(r"(?<![\w/.-])([A-Za-z][A-Za-z-]*\d+(?:/\d+)*(?:\.\d+)?)\((\w+)\)")
+
+
+def port_channels(platform, text):
+    """{bundle: [member ports]} from IOS 'show etherchannel summary' / NX-OS 'show port-channel summary'.
+
+    Rows after the 'Group' header: 'N  Po1(SU)  LACP  Gi1/0/49(P) Gi1/0/50(P)'; long member lists wrap
+    onto lines with only members. Every listed member is kept, whatever its flag (D, s, ...)."""
+    out, current, started = {}, None, False
+    for line in (text or "").splitlines():
+        if re.match(r"\s*Group\b", line):
+            started = True
+            continue
+        if not started:
+            continue
+        tokens = [short_if(m.group(1)) for m in CHANNEL_PORT.finditer(line)]
+        if not tokens:
+            continue
+        if re.match(r"\s*\d+\s", line) and tokens[0].startswith("Po"):
+            current = tokens[0]
+            out[current] = []
+            tokens = tokens[1:]
+        elif not line[:1].isspace():
+            current = None  # a new row this parser does not understand: never add its ports to the last bundle
+        if current is not None:
+            out[current] += [p for p in tokens if not p.startswith("Po") and p not in out[current]]
+    return out
+
+
 def cpu_percent(text):
     """1-minute CPU % from IOS / SG-CBS output, or 100 - idle from NX-OS 'show system resources'."""
     t = text or ""

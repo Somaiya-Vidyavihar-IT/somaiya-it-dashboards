@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 LOCK_STALE_SECONDS = 3 * 3600
 REFRESH_STALE_SECONDS = 15 * 60  # one switch: login + about a dozen show commands
+UPLINKS_STALE_SECONDS = 10 * 60  # the uplink task is stopped by Task Scheduler after 9 minutes
 
 
 def _stale(name):
-    return REFRESH_STALE_SECONDS if name == "refresh.lock" else LOCK_STALE_SECONDS
+    return {"refresh.lock": REFRESH_STALE_SECONDS, "uplinks.lock": UPLINKS_STALE_SECONDS}.get(name, LOCK_STALE_SECONDS)
 
 
 class Store:

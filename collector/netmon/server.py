@@ -27,7 +27,8 @@ from .store import Store
 log = logging.getLogger("netmon.server")
 TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
 # 2: POST /api/v1/refresh (single-switch refresh); 3: /api/v1/cctv/* (CCTV dashboard);
-# 4: POST /api/v1/forget (Remove a Down switch)
+# 4: POST /api/v1/forget (Remove a Down switch). GET /api/v1/uplinks came in the same release (no bump:
+# the page treats a 404 from it as "no data yet").
 API_VERSION = 4
 NETWORK_REFUSAL = "This account is not on the IT Network Team list for the network dashboard."
 CCTV_REFUSAL = "This account is not on the CCTV dashboard list. Ask the IT Network Team to add it."
@@ -216,6 +217,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._file("reachability.json", "application/json")
         if path == "/api/v1/progress":  # per-switch progress of the current or last full run
             return self._file("run-progress.json", "application/json")
+        if path == "/api/v1/uplinks":  # uplink load (10-minute task); {} until its first round
+            cached = self.server.files.get(store.path("uplinks.json"))
+            if cached is None:
+                return self._send(200, {})
+            return self._send(200, cached[0], "application/json", packed=cached[1])
         if path == "/api/v1/download/inventory.xlsx":
             return self._file("inventory-latest.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                               "somaiya-network-inventory.xlsx")
