@@ -248,7 +248,7 @@ class CctvApi(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("CCTV dashboard list", body["error"])
         self.assertEqual(self.req("GET", "/api/v1/cctv/me", "guard"),
-                         (200, {"email": "guard@somaiya.edu", "canRefresh": True, "apiVersion": 3}))
+                         (200, {"email": "guard@somaiya.edu", "canRefresh": True, "apiVersion": 4}))
         self.assertEqual(self.req("GET", "/api/v1/me", "guard")[0], 403, "a CCTV viewer gets no network data")
         self.assertEqual(self.req("GET", "/api/v1/snapshot", "guard")[0], 403)
         self.assertEqual(self.req("GET", "/api/v1/me", "net")[0], 200)

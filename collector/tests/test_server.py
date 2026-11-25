@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 from netmon import config
 from netmon.server import NetmonServer, Verifier
@@ -92,7 +93,7 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/v1/snapshot", "outsider")[0].status, 403)
         resp, body = self.req("GET", "/api/v1/me", "good")
         self.assertEqual(resp.status, 200)
-        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 3})
+        self.assertEqual(json.loads(body), {"email": "net@somaiya.edu", "canRun": True, "apiVersion": 4})
         self.assertEqual(resp.getheader("Access-Control-Allow-Origin"), ORIGIN)
         self.assertEqual(resp.getheader("Cache-Control"), "no-store")
 
@@ -174,12 +175,45 @@ class ApiEndToEnd(unittest.TestCase):
             self.assertIn("refresh-request ip=10.0.0.1 by=net@somaiya.edu", fh.read())
 
 
+    def test_forget_a_down_switch(self):
+        post = lambda body, token="good": self.req("POST", "/api/v1/forget", token, body=body)
+        self.assertEqual(post({"ip": "10.0.0.2"}, None)[0].status, 401)
+        self.assertEqual(post({"ip": "10.0.0.2"}, "outsider")[0].status, 403)
+        self.assertEqual(post({"ip": "10.0.0.2; whoami"})[0].status, 400)
+        self.assertEqual(post({"ip": None})[0].status, 400)
+        self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.1", "status": "ok"},
+                                                   {"ip": "10.0.0.2", "status": "down"}]}, "latest.json")
+        resp, body = post({"ip": "10.0.0.1"})
+        self.assertEqual(resp.status, 404, "only Down switches")
+        self.assertIn("not listed as Down", json.loads(body)["error"])
+        self.assertEqual(post({"ip": "10.0.0.9"})[0].status, 404)
+        self.assertTrue(self.store.acquire({"trigger": "test"}))
+        self.assertEqual(post({"ip": "10.0.0.2"})[0].status, 409, "not during a full run")
+        self.store.release()
+        self.assertTrue(self.store.acquire({"ip": "10.0.0.1"}, "refresh.lock"))
+        self.assertEqual(post({"ip": "10.0.0.2"})[0].status, 409, "not during a refresh")
+        self.store.release("refresh.lock")
+        with mock.patch.object(self.httpd, "_spawn") as spawn:
+            resp, body = post({"ip": "10.0.0.2"})
+        self.assertEqual(resp.status, 202)
+        self.assertEqual(json.loads(body), {"started": True, "ip": "10.0.0.2"})
+        self.assertEqual(spawn.call_args.args[0], ["forget", "--ip", "10.0.0.2", "--by", "net@somaiya.edu", "--locked"])
+        self.assertTrue(self.store.running("refresh.lock"), "the API takes the lock for the child process")
+        self.assertEqual(post({"ip": "10.0.0.2"})[0].status, 409, "one removal at a time")
+        status = json.loads(self.req("GET", "/api/v1/status", "good")[1])
+        self.assertTrue(status["refreshing"])
+        self.assertEqual((status["refresh"]["action"], status["refresh"]["ip"]), ("forget", "10.0.0.2"))
+        self.store.release("refresh.lock")
+        with open(self.store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn("forget-request ip=10.0.0.2 by=net@somaiya.edu", fh.read())
+
     def test_post_bodies_never_leak_into_the_next_request(self):
         """Regression (live): an answer sent before reading the POST body broke the next request on
         the same keep-alive connection, which the page reported as "API unreachable"."""
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=5)
         headers = {"Authorization": "Bearer good", "Origin": ORIGIN, "Content-Type": "application/json"}
-        for path, token in (("/api/v1/nothing-here", "good"), ("/api/v1/run", "bad"), ("/api/v1/refresh", "bad")):
+        for path, token in (("/api/v1/nothing-here", "good"), ("/api/v1/run", "bad"), ("/api/v1/refresh", "bad"),
+                            ("/api/v1/forget", "bad")):
             conn.request("POST", path, body=b'{"ip": "10.0.0.1"}', headers=dict(headers, Authorization="Bearer " + token))
             resp = conn.getresponse()
             resp.read()

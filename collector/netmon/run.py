@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from . import build, config as config_mod, creds, devices, parse, reports, scan, wlc
+from . import build, config as config_mod, creds, devices, known as known_mod, parse, reports, scan, wlc
 from .store import Store, stamp
 
 log = logging.getLogger("netmon.run")
@@ -113,6 +113,9 @@ def _discover(cfg, store, trigger, by, started):
               if n.get("ip") and (n.get("kind") == "phone" or build.is_phone_model(n, phone_re))}
     phones |= {d["ip"] for d in previous.get("devices", []) if build.is_phone_model({"name": d.get("hostname") or ""}, phone_re)}
     known = [d["ip"] for d in previous.get("devices", []) if d["ip"] not in phones]
+    # Switches read on any earlier run (Down ones included) are probed too, until a team member removes them.
+    remembered = known_mod.load(store)
+    known += [ip for ip in remembered if ip not in phones and ip not in known]
     hints = {}
     for d in previous.get("devices", []):
         _add_hints(hints, d.get("neighbors"))
@@ -121,6 +124,13 @@ def _discover(cfg, store, trigger, by, started):
     probes = scan.probe(targets + extra, 22, col["connect_timeout"], col["scan_concurrency"])
     open_ips = [ip for ip, lat in probes.items() if lat is not None]
     closed = {ip for ip, lat in probes.items() if lat is None}
+    # This probe is an up/down check too: the same switches the 15-minute check watches get their
+    # miss counters updated, so a switch that missed the last check and this one is Down now.
+    watched = {d["ip"] for d in previous.get("devices", []) if d.get("status") != "no-ssh"} | set(remembered)
+    reach_prev = (store.read("reachability.json", default={}) or {}).get("results", {}) or {}
+    reach = dict(reach_prev, **known_mod.apply_probe(
+        reach_prev, {ip: probes[ip] for ip in watched if ip in probes}, build.iso_now()))
+    store.write({"checkedAt": build.iso_now(), "results": reach}, "reachability.json")
     progress = Progress(store, started, trigger, by)
     seeds, last_run = set(col["seeds"]), set(known)
     for ip in probes:
@@ -203,20 +213,24 @@ def _discover(cfg, store, trigger, by, started):
     store.status(phase="report")
     progress.write(force=True, phase="report")
     prev_counters = store.read("state", "counters.json", default={}) or {}
+    # Read again just before use: a Remove that finished as this run was starting must not bring the switch back.
+    remembered = known_mod.load(store)
     snapshot, baseline, counters = build.build(
         cfg, records, wlcs, store.read("state", "links-baseline.json", default={}),
         prev_counters, scan_info,
-        {"trigger": trigger, "triggeredBy": by, "startedAt": started}, ssh_closed=frozenset(closed))
+        {"trigger": trigger, "triggeredBy": by, "startedAt": started}, ssh_closed=frozenset(closed),
+        known=remembered, reach=reach)
     snapshot["finishedAt"] = build.iso_now()
     progress.write(force=True, phase="done", finishedAt=snapshot["finishedAt"])
     store.write(baseline, "state", "links-baseline.json")
     store.write(counters, "state", "counters.json")
+    known_mod.save(store, known_mod.update_from_records(remembered, records, snapshot["devices"], snapshot["finishedAt"]))
     # Everything build() needs, so one switch can later be re-read and the snapshot rebuilt without a
-    # full run (refresh_switch). The same data as latest.json in raw form; never passwords.
+    # full run (refresh_switch, forget_switch). The same data as latest.json in raw form; never passwords.
     store.write({"generatedAt": snapshot["generatedAt"], "finishedAt": snapshot["finishedAt"],
                  "meta": {"trigger": trigger, "triggeredBy": by, "startedAt": started}, "scan": scan_info,
-                 "records": records, "wlcs": wlcs, "closed": sorted(closed), "countersBase": prev_counters},
-                "state", "last-run.json")
+                 "records": records, "wlcs": wlcs, "closed": sorted(closed), "countersBase": prev_counters,
+                 "reach": reach}, "state", "last-run.json")
     return snapshot
 
 
@@ -278,6 +292,35 @@ class RefreshRefused(Exception):
     """A refresh that cannot go ahead; the message is shown on the dashboard."""
 
 
+def _rebuild_from_last(store, cfg, records, last, now, refreshed=None):
+    """Rebuild latest.json from the last full run's raw records (state/last-run.json) without logging in.
+
+    Shared by refresh_switch (`refreshed`: the switch just re-read) and forget_switch. Known switches
+    come from state/known-switches.json as it is now (a removed switch is gone); up/down misses are
+    the ones the full run used, so Down rows stay exactly as that run listed them.
+    """
+    # Error deltas: other switches keep the base their full run used; a re-read one counts from its last read.
+    counters = store.read("state", "counters.json", default={}) or {}
+    base = dict(last.get("countersBase") or {})
+    if refreshed:
+        if refreshed in counters:
+            base[refreshed] = counters[refreshed]
+        else:
+            base.pop(refreshed, None)
+    snapshot, baseline, new_counters = build.build(
+        cfg, records, last["wlcs"], store.read("state", "links-baseline.json", default={}), base,
+        last["scan"], last["meta"], ssh_closed=frozenset(last.get("closed", [])), now=now,
+        known=known_mod.load(store), reach=last.get("reach") or {})
+    snapshot.update(generatedAt=last["generatedAt"], finishedAt=last.get("finishedAt"), refreshedAt=now)
+    store.write(baseline, "state", "links-baseline.json")
+    if refreshed and refreshed in new_counters:
+        counters[refreshed] = new_counters[refreshed]
+        store.write(counters, "state", "counters.json")
+    store.write(dict(last, records=records), "state", "last-run.json")
+    _publish(store, snapshot)
+    return snapshot
+
+
 def refresh_switch(cfg, ip, by="", locked=False):
     """Re-read one switch and rebuild the snapshot around it (dashboard: Refresh switch / Reconnect).
 
@@ -334,25 +377,9 @@ def refresh_switch(cfg, ip, by="", locked=False):
             last = dict(last, closed=[c for c in last["closed"] if c != ip])
         else:
             raise RefreshRefused(f"{ip} is no longer in the last full discovery run.")
-        # Error deltas: other switches keep the base their full run used; this one counts from its last read.
-        counters = store.read("state", "counters.json", default={}) or {}
-        base = dict(last.get("countersBase") or {})
-        if ip in counters:
-            base[ip] = counters[ip]
-        else:
-            base.pop(ip, None)
-        snapshot, baseline, new_counters = build.build(
-            cfg, records, last["wlcs"], store.read("state", "links-baseline.json", default={}), base,
-            last["scan"], last["meta"], ssh_closed=frozenset(last.get("closed", [])), now=now)
-        snapshot.update(generatedAt=last["generatedAt"], finishedAt=last.get("finishedAt"), refreshedAt=now)
         store.write(platforms, "state", "platforms.json")
         store.write(cred_of, "state", "credentials.json")
-        store.write(baseline, "state", "links-baseline.json")
-        if ip in new_counters:
-            counters[ip] = new_counters[ip]
-            store.write(counters, "state", "counters.json")
-        store.write(dict(last, records=records), "state", "last-run.json")
-        _publish(store, snapshot)
+        _rebuild_from_last(store, cfg, records, last, now, refreshed=ip)
         store.write({"state": "done", "ip": ip, "by": by, "startedAt": started, "finishedAt": build.iso_now(),
                      "ok": rec["ok"], "error": None if rec["ok"] else rec.get("error"),
                      "hostname": rec.get("hostname", ""), "snapshotRefreshedAt": now}, "refresh-status.json")
@@ -369,22 +396,66 @@ def refresh_switch(cfg, ip, by="", locked=False):
         store.release("refresh.lock")
 
 
+def forget_switch(cfg, ip, by="", locked=False):
+    """Remove a Down switch from the dashboard (Remove): forget it and rebuild the snapshot without it.
+
+    Only a switch the latest snapshot lists as Down can be removed. No login and no probe; the
+    snapshot is rebuilt from state/last-run.json like refresh_switch. If the switch answers tcp/22
+    again later, a full run finds it like any other switch (subnet sweep, seed or CDP/LLDP neighbour).
+    Shares refresh.lock with refresh_switch.
+    """
+    store = Store(cfg["collector"]["data_dir"])
+    if not locked and not store.acquire({"ip": ip, "by": by, "action": "forget"}, "refresh.lock"):
+        log.warning("A switch refresh or removal is in progress; exiting")
+        return 2
+    started = build.iso_now()
+    head = {"action": "forget", "ip": ip, "by": by, "startedAt": started}
+    store.write(dict(head, state="running", finishedAt=None, ok=None, error=None), "refresh-status.json")
+    try:
+        if store.running():
+            raise RefreshRefused("A full discovery run is in progress. Remove the switch when it finishes.")
+        latest = store.read("latest.json", default={}) or {}
+        row = next((d for d in latest.get("devices", []) if d.get("ip") == ip), None)
+        if not row or row.get("status") != "down":
+            raise RefreshRefused(f"{ip} is not listed as Down; only a Down switch can be removed.")
+        last = store.read("state", "last-run.json", default=None)
+        if not last:
+            raise RefreshRefused("Removing a switch needs one full discovery run with the updated collector first.")
+        remembered = known_mod.load(store)
+        known_mod.forget(remembered, ip)
+        known_mod.save(store, remembered)
+        now = build.iso_now()
+        _rebuild_from_last(store, cfg, last["records"], last, now)
+        store.write(dict(head, state="done", finishedAt=build.iso_now(), ok=True, error=None,
+                         hostname=row.get("hostname", ""), snapshotRefreshedAt=now), "refresh-status.json")
+        store.audit(f"forget ip={ip} by={by or '-'}")
+        return 0
+    except Exception as exc:
+        if not isinstance(exc, RefreshRefused):
+            log.exception("Removing %s failed", ip)
+        store.write(dict(head, state="failed", finishedAt=build.iso_now(), ok=False, error=str(exc)[:300]),
+                    "refresh-status.json")
+        store.audit(f"forget-failed ip={ip} by={by or '-'} error={str(exc)[:200]!r}")
+        return 1
+    finally:
+        store.release("refresh.lock")
+
+
 def reach_run(cfg):
-    """Cheap up/down: TCP 22 to every switch in the latest snapshot plus the WLCs. No login."""
+    """Cheap up/down: TCP 22 to every switch in the latest snapshot, known switches missing from it,
+    and the WLCs. No login. Each address keeps a count of consecutive misses (2 = Down)."""
     col = cfg["collector"]
     store = Store(col["data_dir"])
     latest = store.read("latest.json", default={}) or {}
+    listed = {d["ip"] for d in latest.get("devices", [])}
     # "no-ssh" switches are known not to answer tcp/22; Reconnect or the next full run re-checks them.
-    ips = [d["ip"] for d in latest.get("devices", []) if d.get("status") != "no-ssh"] + list(cfg["wlc"]["hosts"])
+    ips = [d["ip"] for d in latest.get("devices", []) if d.get("status") != "no-ssh"]
+    ips += [ip for ip in known_mod.load(store) if ip not in listed]
+    ips += [h for h in cfg["wlc"]["hosts"] if h not in ips]
     results = scan.probe(ips, 22, max(col["connect_timeout"], 2.0), 256)
     prev = (store.read("reachability.json", default={}) or {}).get("results", {})
     now = build.iso_now()
-    out = {}
-    for ip, latency in results.items():
-        up = latency is not None
-        before = prev.get(ip, {})
-        since = before.get("since") if before.get("up") == up and before.get("since") else now
-        out[ip] = {"up": up, "since": since, "latencyMs": latency}
+    out = known_mod.apply_probe(prev, results, now)
     store.write({"checkedAt": now, "results": out}, "reachability.json")
     down = sum(not v["up"] for v in out.values())
     log.info("Reachability: %d checked, %d down", len(out), down)

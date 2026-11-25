@@ -239,6 +239,63 @@ class BuildSnapshot(unittest.TestCase):
         self.assertFalse(any("10.0.0.1" in k for k in base2))
 
 
+class DownSwitches(unittest.TestCase):
+    """A switch read before that stops answering tcp/22 stays listed as Down (2 missed checks)."""
+
+    def setUp(self):
+        from netmon import known
+        snap, _, _ = build.build(CFG, campus(), WLC, now="2026-11-05T02:30:00Z", ssh_closed=frozenset({"10.0.1.50"}))
+        self.known = known.update_from_records({}, campus(), snap["devices"], "2026-11-05T02:30:00Z")
+        # Next run: asw-02 does not answer tcp/22, so it has no record and dsw-01 no longer sees it.
+        recs = campus()
+        recs[1]["neighbors"] = [n for n in recs[1]["neighbors"] if n["name"] != "asw-02"]
+        self.recs = [r for r in recs if r["ip"] != "10.0.1.2"]
+
+    def _build(self, misses, closed=frozenset({"10.0.1.2"})):
+        reach = {"10.0.1.2": {"up": False, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": misses}}
+        snap, _, _ = build.build(CFG, self.recs, WLC, now="2026-11-05T11:00:00Z", ssh_closed=closed,
+                                 known=self.known, reach=reach)
+        return snap, {d["ip"]: d for d in snap["devices"]}
+
+    def test_known_switch_missing_twice_is_down_with_last_inventory(self):
+        snap, dev = self._build(2)
+        d = dev["10.0.1.2"]
+        self.assertEqual((d["status"], d["flags"], d["hostname"], d["model"], d["serial"], d["platform"], d["role"]),
+                         ("down", ["down"], "asw-02", "X", "S-asw-02", "cisco_s300", "access"))
+        self.assertEqual(d["downSince"], "2026-11-05T09:15:00Z")
+        self.assertEqual([u["name"] for u in d["lastUplinks"]], ["dsw-01", "unknown-sw"])
+        self.assertEqual(d["lastUplinks"][0], {"localPort": "Gi1/0/28", "name": "dsw-01", "ip": "10.0.1.1",
+                                               "remotePort": "Gi1/0/1"})
+        self.assertEqual((d["neighbors"], d["commands"], d["cpu"], d["ports"]), ([], [], None, None))
+        down = [f for f in snap["findings"] if f["type"] == "down"]
+        self.assertEqual(len(down), 1)
+        self.assertEqual((down[0]["severity"], down[0]["ip"], down[0]["hostname"]), ("critical", "10.0.1.2", "asw-02"))
+        self.assertIn("Remove", down[0]["message"])
+        s = snap["summary"]
+        self.assertEqual((s["down"], s["switches"], s["failed"]), (1, 4, 1))
+
+    def test_one_miss_is_not_down(self):
+        snap, dev = self._build(1)
+        self.assertNotIn("10.0.1.2", dev)
+        self.assertEqual(snap["summary"]["down"], 0)
+        self.assertFalse([f for f in snap["findings"] if f["type"] == "down"])
+        self.assertEqual(build.build(CFG, self.recs, WLC, now="2026-11-05T11:00:00Z")[0]["summary"]["down"], 0,
+                         "no known list: nothing is down")
+
+    def test_no_ssh_rows_never_go_down(self):
+        self.known["10.0.1.50"] = dict(self.known["10.0.1.1"], ip="10.0.1.50", hostname="unknown-sw")
+        recs = campus()  # asw-02 answers again and still sees 10.0.1.50, which does not answer SSH
+        reach = {ip: {"up": False, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": 5}
+                 for ip in ("10.0.1.50", "10.0.1.2", "10.0.1.3")}
+        snap, _, _ = build.build(CFG, recs, WLC, now="2026-11-05T11:00:00Z", ssh_closed=frozenset({"10.0.1.50"}),
+                                 known=self.known, reach=reach)
+        dev = {d["ip"]: d for d in snap["devices"]}
+        self.assertEqual(dev["10.0.1.50"]["status"], "no-ssh")
+        self.assertEqual(dev["10.0.1.2"]["status"], "ok", "a collected record is never Down")
+        self.assertEqual(dev["10.0.1.3"]["status"], "failed")
+        self.assertEqual(snap["summary"]["down"], 0)
+
+
 class Reports(unittest.TestCase):
     def test_excel_cells_never_become_formulas(self):
         self.assertEqual(reports.safe_cell("=HYPERLINK(\"x\")"), "'=HYPERLINK(\"x\")")

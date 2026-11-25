@@ -141,6 +141,41 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   assert.ok(r.el('refresh-note').textContent.startsWith('Refreshed '));assert.equal(r.el('toast').textContent,'asw-03 refreshed.');
   assert.ok(r.el('data-note').textContent.includes('Last single-switch refresh'));
   await vm.runInContext('loadAll()',r.ctx);assert.equal(snaps(),before+1,'No reload once the refreshed snapshot is shown');}
+ // A switch read before that stopped answering tcp/22: Down with its last-known inventory; team members can Remove it (API 4+).
+ {const downDev={ip:'10.0.1.7',hostname:'asw-07',institute:'Engineering',platform:'cisco_s300',model:'SG350-28P',serial:'S7',version:'2.5.9',uptime:'',role:'access',depth:null,status:'down',error:'Stopped answering the up/down check (tcp/22) from the collector',warnings:[],cpu:null,poe:null,ports:null,errDelta:null,flags:['down'],neighbors:[],commands:[],neighborIssues:[],credentialSet:'',loginUser:'',downSince:'2026-11-05T01:15:00Z',lastSeenOk:'2026-11-04T11:00:00Z',lastUplinks:[{localPort:'Gi1/0/28',name:'dsw-<b>01</b>',ip:'10.0.1.1',remotePort:'Gi1/0/7'}]};
+  const withDown={...snapshot,summary:{...snapshot.summary,switches:5,down:1},devices:[...snapshot.devices,downDev]},at='2026-11-05T05:00:00Z';
+  const st={run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:reach.checkedAt,refresh:{},refreshing:false};
+  let current=withDown,forgetReply={status:202,body:{started:true,ip:'10.0.1.7'}};
+  const routes=v=>(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:v}}:p==='/api/v1/status'?{status:200,body:{...st}}:p==='/api/v1/snapshot'?{status:200,body:current}:p==='/api/v1/forget'&&m==='POST'?forgetReply:team(p,m);
+  const d=harness(API,routes(4));await d.connect();
+  assert.ok(d.el('sw-rows').innerHTML.includes('asw-07')&&d.el('sw-rows').innerHTML.includes('<span class="badge bad">Down</span>'),'Down switches are listed with a Down badge');
+  assert.ok(d.el('stats').innerHTML.includes('1 down'),'Overview counts Down switches');
+  vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",d.ctx);assert.ok(d.el('sw-count').textContent.startsWith('1 of 5'),'Filter Down');assert.ok(d.el('sw-rows').innerHTML.includes('asw-07'));
+  vm.runInContext("document.getElementById('sw-state').value='';renderSwitches()",d.ctx);
+  vm.runInContext("openDevice('10.0.1.7')",d.ctx);const body=d.el('detail-body').innerHTML;
+  assert.ok(body.includes('<b>Down since</b><span>05 Nov 2026, 06:45 IST</span>'),'Down since is shown');assert.ok(body.includes('Last read'),'When it was last read');
+  assert.ok(body.includes('Last-known uplinks')&&body.includes('Gi1/0/28')&&body.includes('Gi1/0/7')&&body.includes('dsw-&lt;b&gt;01')&&!body.includes('<b>01'),'Last-known uplinks, escaped');
+  assert.ok(!body.includes('Login account'),'No login row for a Down switch');
+  assert.equal(d.el('remove-switch').hidden,false,'Team members can Remove a Down switch');assert.equal(d.el('remove-switch').disabled,false);
+  d.ctx.window.confirm=()=>false;await vm.runInContext('removeSwitch()',d.ctx);assert.ok(!d.calls.some(c=>c.url===API+'/api/v1/forget'),'Nothing is removed without confirming');
+  let asked='';d.ctx.window.confirm=q=>{asked=q;return true};
+  forgetReply={status:409,body:{error:'10.0.0.1 is being refreshed or removed. Try again when it finishes.'}};await vm.runInContext('removeSwitch()',d.ctx);assert.ok(d.el('toast').textContent.includes('being refreshed or removed'),'API refusals are shown');
+  assert.ok(asked.includes('asw-07 (10.0.1.7)'),asked);
+  forgetReply={status:202,body:{started:true,ip:'10.0.1.7'}};st.refreshing=true;st.refresh={action:'forget',state:'running',ip:'10.0.1.7',by:'net@somaiya.edu'};
+  await vm.runInContext('removeSwitch()',d.ctx);
+  const post=d.calls.filter(c=>c.url===API+'/api/v1/forget').pop();assert.equal(post.method,'POST');assert.equal(post.body,'{"ip":"10.0.1.7"}');assert.equal(post.type,'application/json');assert.equal(post.auth,'Bearer fixture-token');
+  assert.equal(d.el('remove-switch').disabled,true);assert.ok(d.el('refresh-note').textContent.startsWith('Removing this switch'),d.el('refresh-note').textContent);
+  vm.runInContext("openDevice('10.0.0.1')",d.ctx);assert.equal(d.el('remove-switch').hidden,true,'Remove only on Down rows');vm.runInContext("openDevice('10.0.1.7')",d.ctx);
+  st.refreshing=false;st.refresh={action:'forget',state:'done',ip:'10.0.1.7',by:'net@somaiya.edu',ok:true,hostname:'asw-07',finishedAt:'2026-11-05T05:00:01Z',snapshotRefreshedAt:at};current={...snapshot,refreshedAt:at};
+  await vm.runInContext('loadAll()',d.ctx);assert.equal(d.el('toast').textContent,'asw-07 removed from the dashboard.');assert.equal(d.el('details').open,false,'The dialog of a removed switch closes');
+  assert.ok(!d.el('sw-rows').innerHTML.includes('asw-07'));
+  current=withDown;const o=harness(API,routes(3));await o.connect();vm.runInContext("openDevice('10.0.1.7')",o.ctx);assert.equal(o.el('remove-switch').hidden,true,'No Remove on an API without the endpoint');
+  // Between full runs: 2 missed up/down checks on a listed switch show Down too.
+  const reach2={checkedAt:'2026-11-05T03:15:00Z',results:{...reach.results,'10.0.0.1':{up:false,since:'2026-11-05T02:45:00Z',latencyMs:null,misses:2}}};
+  const l=harness(API,(p,m)=>p==='/api/v1/reachability'?{status:200,body:reach2}:p==='/api/v1/status'?{status:200,body:{...st,reachabilityAt:reach2.checkedAt}}:routes(4)(p,m));await l.connect();
+  vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",l.ctx);assert.ok(l.el('sw-count').textContent.startsWith('2 of 5'),l.el('sw-count').textContent);assert.ok(l.el('sw-rows').innerHTML.includes('core-01'),'A live row with 2 misses shows Down');
+  vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",l.ctx);assert.ok(l.el('sw-count').textContent.startsWith('1 of 5'),'One miss is still Unreachable');
+  vm.runInContext("openDevice('10.0.0.1')",l.ctx);assert.ok(l.el('detail-body').innerHTML.includes('<b>Down since</b><span>05 Nov 2026, 08:15 IST</span>'));assert.equal(l.el('remove-switch').hidden,true,'Remove only for Down rows from the snapshot');}
  // Topology diagram: the API's DOT file is laid out by Viz.js (stubbed here) and active SVG content is removed.
  {const removed=[],script={remove(){removed.push('script')}},title={textContent:'10.0.0.1'};
   const node={attributes:[{name:'xlink:href'},{name:'class'}],dataset:{},removeAttribute(n){removed.push(n)},querySelector:s=>s==='title'?title:null};
@@ -177,5 +212,5 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
- console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, single-switch refresh, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
+ console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, single-switch refresh, Down switches and Remove, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
 })().catch(e=>{console.error(e);process.exitCode=1});

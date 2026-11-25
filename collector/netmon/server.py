@@ -25,7 +25,9 @@ from .store import Store
 
 log = logging.getLogger("netmon.server")
 TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
-API_VERSION = 3  # 2: POST /api/v1/refresh (single-switch refresh); 3: /api/v1/cctv/* (CCTV dashboard)
+# 2: POST /api/v1/refresh (single-switch refresh); 3: /api/v1/cctv/* (CCTV dashboard);
+# 4: POST /api/v1/forget (Remove a Down switch)
+API_VERSION = 4
 NETWORK_REFUSAL = "This account is not on the IT Network Team list for the network dashboard."
 CCTV_REFUSAL = "This account is not on the CCTV dashboard list. Ask the IT Network Team to add it."
 
@@ -237,6 +239,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._cctv_refresh()
         if path == "/api/v1/refresh":
             return self._refresh(body)
+        if path == "/api/v1/forget":
+            return self._forget(body)
         if path != "/api/v1/run":
             return self._error(404, "Not found")
         email = self._auth()
@@ -281,6 +285,36 @@ class Handler(BaseHTTPRequestHandler):
         store.audit(f"refresh-request ip={ip} by={email} from={self.client_address[0]}")
         self._send(202, {"started": True, "ip": ip})
 
+    def _forget(self, body):
+        """Remove a Down switch from the dashboard (Remove). Same lock as a refresh: one at a time."""
+        email = self._auth()
+        if not email:
+            return
+        try:
+            ip = str(ipaddress.IPv4Address(str(json.loads(body).get("ip", ""))))
+        except (ValueError, AttributeError, TypeError):
+            return self._error(400, "That is not a valid switch IP address.")
+        store = self.server.store
+        if store.running():
+            return self._error(409, "A full discovery run is in progress. Remove the switch when it finishes.")
+        if self.server.switch_status(ip) != "down":
+            return self._error(404, "This address is not listed as Down on the dashboard; only a Down switch can be removed.")
+        if not store.acquire({"ip": ip, "by": email, "action": "forget"}, "refresh.lock"):
+            busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"
+            return self._error(409, f"{busy} is being refreshed or removed. Try again when it finishes.")
+        store.write({"action": "forget", "state": "running", "ip": ip, "by": email, "startedAt": None,
+                     "finishedAt": None, "ok": None, "error": None}, "refresh-status.json")
+        try:
+            self.server.start_forget(email, ip)
+        except Exception:
+            store.release("refresh.lock")
+            store.write({"action": "forget", "state": "failed", "ip": ip, "by": email, "ok": False,
+                         "error": "The collector could not be started on the server."}, "refresh-status.json")
+            log.exception("Could not start removing %s", ip)
+            return self._error(500, "The collector could not be started on the server.")
+        store.audit(f"forget-request ip={ip} by={email} from={self.client_address[0]}")
+        self._send(202, {"started": True, "ip": ip})
+
 
     # ---- CCTV dashboard: own allowlist, data read from SolarWinds by the in-process poller ----
     def _cctv_auth(self):
@@ -317,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
 class NetmonServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None, start_refresh=None, cctv=None):
+    def __init__(self, cfg, verifier=None, start_run=None, ssl_ctx=None, start_refresh=None, cctv=None,
+                 start_forget=None):
         srv = cfg["server"]
         super().__init__((srv["host"], srv["port"]), Handler)
         self.ssl_ctx = ssl_ctx
@@ -327,21 +362,30 @@ class NetmonServer(ThreadingHTTPServer):
         self.verifier = verifier or Verifier(srv["google_client_id"], srv["allowed_domains"], srv["network_team"])
         self.start_run = start_run or self._spawn_run
         self.start_refresh = start_refresh or self._spawn_refresh
-        self._known = (None, frozenset())
+        self.start_forget = start_forget or self._spawn_forget
+        self._known = (None, {})
         if cctv is None and cfg.get("cctv", {}).get("enabled"):
             from .cctv import Poller
             cctv = Poller(cfg, self.store)
         self.cctv = cctv  # None: CCTV routes answer 404 "not set up"
 
-    def known_switches(self):
-        """Switch IPs in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
+    def _statuses(self):
+        """{ip: status} of the switches in latest.json, re-read only when the file changes."""
         cached = self.files.get(self.store.path("latest.json"))
         if cached is None:
-            return frozenset()
+            return {}
         raw = cached[0]
         if self._known[0] is not raw:
-            self._known = (raw, frozenset(d.get("ip") for d in json.loads(raw).get("devices", [])))
+            self._known = (raw, {d.get("ip"): d.get("status") for d in json.loads(raw).get("devices", [])})
         return self._known[1]
+
+    def known_switches(self):
+        """Switch IPs in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
+        return frozenset(self._statuses())
+
+    def switch_status(self, ip):
+        """Status of one switch in latest.json ("ok", "failed", "no-ssh", "down"), or None."""
+        return self._statuses().get(ip)
 
     def finish_request(self, request, client_address):
         # TLS handshake in the worker thread so a slow client cannot stall accept().
@@ -366,6 +410,9 @@ class NetmonServer(ThreadingHTTPServer):
     def _spawn_refresh(self, email, ip):
         # --locked: this request already holds refresh.lock; the child releases it when done.
         self._spawn(["refresh", "--ip", ip, "--by", email, "--locked"], "refresh.log")
+
+    def _spawn_forget(self, email, ip):
+        self._spawn(["forget", "--ip", ip, "--by", email, "--locked"], "refresh.log")
 
     def _spawn(self, args, log_name):
         python = self.cfg["server"]["python"] or sys.executable

@@ -94,6 +94,14 @@ class Cli(unittest.TestCase):
         with self.assertRaises(creds.CredentialError):
             creds.store(self.cfg, "switch", "x", "set9")
 
+    def test_forget_command_passes_ip_by_and_lock(self):
+        with mock.patch("netmon.config.load", return_value=self.cfg), mock.patch("logging.basicConfig"), \
+                mock.patch("logging.FileHandler"), mock.patch("netmon.run.forget_switch", return_value=0) as forget:
+            self.assertEqual(cli.main(["forget", "--ip", "10.0.0.2", "--by", "net@somaiya.edu", "--locked"]), 0)
+            forget.assert_called_once_with(self.cfg, "10.0.0.2", "net@somaiya.edu", locked=True)
+            cli.main(["forget", "--ip", "10.0.0.2"])
+            forget.assert_called_with(self.cfg, "10.0.0.2", "", locked=False)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from netmon import config, run
+from netmon import config, known, run
 from netmon.store import Store
 from tests.test_build import WLC, campus
 
@@ -291,6 +291,117 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual(self._refresh("10.0.1.2", None), (2, []), "one refresh at a time")
         self.assertTrue(store.running("refresh.lock"), "the other refresh keeps its lock")
         self.assertFalse(store.running(), "a refresh never holds the full-run lock")
+
+    def _reach(self, answers):
+        """15-minute check; answers: {ip: latency or None}, everything else up."""
+        probed = []
+
+        def probe(ips, *a, **k):
+            probed.extend(ips)
+            return {ip: answers.get(ip, 1.0) for ip in ips}
+        with mock.patch("netmon.scan.probe", side_effect=probe):
+            self.assertEqual(run.reach_run(self.cfg), 0)
+        return probed
+
+    def _full_run_asw_gone(self):
+        """A full run while asw-02 (10.0.1.2) is switched off: no tcp/22 and dsw-01 no longer sees it."""
+        saved = self.records
+        dsw = copy.deepcopy(saved["10.0.1.1"])
+        dsw["neighbors"] = [n for n in dsw["neighbors"] if n["name"] != "asw-02"]
+        self.records = {ip: r for ip, r in dict(saved, **{"10.0.1.1": dsw}).items() if ip != "10.0.1.2"}
+        try:
+            return self._full_run()
+        finally:
+            self.records = saved
+
+    def _make_down(self):
+        store = self._full_run()
+        self.assertIn("10.0.1.2", known.load(store))
+        self._reach({"10.0.1.2": None})
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 1)
+        self._full_run_asw_gone()
+        return store
+
+    def test_down_switch_recovers(self):
+        store = self._make_down()
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 2,
+                         "the full run's own tcp/22 probe counts as a check")
+        latest = store.read("latest.json")
+        dev = next(d for d in latest["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual((dev["status"], dev["hostname"], dev["model"]), ("down", "asw-02", "X"))
+        self.assertEqual(dev["lastUplinks"][0]["name"], "dsw-01")
+        self.assertEqual(latest["summary"]["down"], 1)
+        self.assertIn("10.0.1.2", self._reach({}), "Down switches are still checked every 15 minutes")
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 0)
+        self._full_run()
+        dev = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual(dev["status"], "ok")
+        self.assertEqual(store.read("latest.json")["summary"]["down"], 0)
+
+    def test_one_missed_check_is_not_down(self):
+        store = self._full_run()
+        self._full_run_asw_gone()
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 1)
+        self.assertNotIn("10.0.1.2", [d["ip"] for d in store.read("latest.json")["devices"]])
+        self.assertIn("10.0.1.2", known.load(store), "still remembered")
+        self.assertIn("10.0.1.2", self._reach({"10.0.1.2": None}), "checked although missing from the snapshot")
+        self._full_run_asw_gone()
+        self.assertEqual(next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")["status"], "down")
+
+    def test_reach_probes_known_switches_missing_from_latest(self):
+        store = self._full_run()
+        entries = known.load(store)
+        self.assertEqual(sorted(entries), ["10.0.0.1", "10.0.1.1", "10.0.1.2"], "10.0.1.3 never answered tcp/22")
+        entries["10.0.1.9"] = dict(entries["10.0.1.2"], ip="10.0.1.9", hostname="asw-09")
+        known.save(store, entries)
+        probed = self._reach({"10.0.1.9": None})
+        self.assertIn("10.0.1.9", probed)
+        self.assertIn("10.0.0.5", probed, "WLCs too")
+        self.assertNotIn("10.0.1.50", probed, "no-ssh rows are not up/down checked")
+        self.assertEqual(len(probed), len(set(probed)))
+        res = store.read("reachability.json")["results"]
+        self.assertEqual((res["10.0.1.9"]["up"], res["10.0.1.9"]["misses"], res["10.0.0.1"]["misses"]), (False, 1, 0))
+
+    def test_forget_removes_down_switch_and_rebuilds(self):
+        store = self._make_down()
+        before = store.read("latest.json")
+        # A single-switch refresh in between keeps the Down row (same rebuild as forget).
+        self.assertEqual(self._refresh("10.0.0.1", self.records["10.0.0.1"])[0], 0)
+        self.assertEqual(next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")["status"], "down")
+        with mock.patch("netmon.devices.collect", side_effect=AssertionError("no login")), \
+                mock.patch("netmon.scan.probe", side_effect=AssertionError("no probe")):
+            self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 0)
+        latest = store.read("latest.json")
+        self.assertNotIn("10.0.1.2", [d["ip"] for d in latest["devices"]])
+        self.assertEqual(latest["summary"]["down"], 0)
+        self.assertEqual(latest["summary"]["switches"], before["summary"]["switches"] - 1)
+        self.assertEqual(latest["generatedAt"], before["generatedAt"], "still dated by its full run")
+        self.assertFalse([f for f in latest["findings"] if f["type"] == "down"])
+        self.assertNotIn("10.0.1.2", known.load(store))
+        status = store.read("refresh-status.json")
+        self.assertEqual((status["state"], status["action"], status["ok"], status["ip"]), ("done", "forget", True, "10.0.1.2"))
+        self.assertEqual(status["snapshotRefreshedAt"], latest["refreshedAt"])
+        self.assertFalse(store.running("refresh.lock"))
+        with open(store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn("forget ip=10.0.1.2 by=net@somaiya.edu", fh.read())
+        self.assertNotIn("10.0.1.2", self._reach({}), "no longer checked")
+
+    def test_forget_refuses_a_switch_that_is_not_down(self):
+        store = self._full_run()
+        before = store.read("latest.json")
+        for ip in ("10.0.1.1", "10.0.1.50", "10.0.9.9"):
+            self.assertEqual(run.forget_switch(self.cfg, ip, "net@somaiya.edu"), 1, ip)
+            self.assertIn("only a Down switch can be removed", store.read("refresh-status.json")["error"])
+        self.assertEqual(store.read("latest.json"), before)
+        self.assertIn("10.0.1.1", known.load(store))
+        self.assertFalse(store.running("refresh.lock"))
+        self.assertTrue(store.acquire({"ip": "10.0.0.1"}, "refresh.lock"))
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.1", "net@somaiya.edu"), 2, "one refresh or removal at a time")
+        store.release("refresh.lock")
+        self.assertTrue(store.acquire({"trigger": "scheduled"}))
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.1", "net@somaiya.edu"), 1)
+        self.assertIn("full discovery run is in progress", store.read("refresh-status.json")["error"])
+        store.release()
 
     def test_second_run_refused_while_locked(self):
         store = Store(self.tmp.name)

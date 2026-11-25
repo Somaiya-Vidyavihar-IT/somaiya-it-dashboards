@@ -3,6 +3,7 @@
   python -m netmon [--config PATH] run [--trigger scheduled|manual] [--by EMAIL]
   python -m netmon [--config PATH] reach
   python -m netmon [--config PATH] refresh --ip 10.0.0.1 [--by EMAIL]
+  python -m netmon [--config PATH] forget --ip 10.0.0.1 [--by EMAIL]
   python -m netmon [--config PATH] serve [--dev-http]
   python -m netmon [--config PATH] capture --ip 10.0.0.1 [--platform auto|cisco_ios|cisco_nxos|cisco_s300] | --wlc 10.0.0.5
   python -m netmon [--config PATH] cctv
@@ -33,6 +34,10 @@ def main(argv=None):
     f.add_argument("--ip", required=True)
     f.add_argument("--by", default="")
     f.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
+    fg = sub.add_parser("forget", help="remove a Down switch from the dashboard and rebuild the snapshot")
+    fg.add_argument("--ip", required=True)
+    fg.add_argument("--by", default="")
+    fg.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
     sub.add_parser("cctv", help="check cameras and NVRs once (the API does this every few minutes)")
     mt = sub.add_parser("cctv-mail-test", help="send one test email with the CCTV mail settings (ignores the switch)")
     mt.add_argument("--to", required=True)
@@ -77,6 +82,9 @@ def main(argv=None):
     if args.cmd == "refresh":
         from .run import refresh_switch
         return refresh_switch(cfg, args.ip, args.by, locked=args.locked)
+    if args.cmd == "forget":
+        from .run import forget_switch
+        return forget_switch(cfg, args.ip, args.by, locked=args.locked)
     if args.cmd == "reach":
         from .run import reach_run
         return reach_run(cfg)
