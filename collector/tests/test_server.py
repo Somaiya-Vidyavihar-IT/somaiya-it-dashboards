@@ -232,7 +232,31 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual((status["refresh"]["action"], status["refresh"]["ip"]), ("forget", "10.0.0.2"))
         self.store.release("refresh.lock")
         with open(self.store.path("audit.log"), encoding="utf-8") as fh:
-            self.assertIn("forget-request ip=10.0.0.2 by=net@somaiya.edu", fh.read())
+            self.assertIn("forget-request ip=10.0.0.2 by=net@somaiya.edu status=down", fh.read())
+
+    def test_forget_an_ssh_failed_switch_but_never_a_seed(self):
+        """R10: Remove also takes a switch whose SSH login fails (the collector stops logging in to it);
+        a core seed is refused; a known switch now out of scope can be removed."""
+        post = lambda body: self.req("POST", "/api/v1/forget", "good", body=body)
+        self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.6", "status": "failed"},
+                                                   {"ip": "10.0.0.7", "status": "failed"}]}, "latest.json")
+        self.httpd.cfg["collector"]["seeds"] = ["10.0.0.7"]
+        from netmon import known
+        known.save(self.store, {"10.9.0.1": {"ip": "10.9.0.1"}})
+        resp, body = post({"ip": "10.0.0.7"})
+        self.assertEqual(resp.status, 404)
+        self.assertIn("core seed", json.loads(body)["error"])
+        resp, body = post({"ip": "10.0.0.8"})
+        self.assertIn("not listed as Down or SSH failed", json.loads(body)["error"])
+        for ip in ("10.0.0.6", "10.9.0.1"):
+            with mock.patch.object(self.httpd, "_spawn") as spawn:
+                self.assertEqual(post({"ip": ip})[0].status, 202, ip)
+            self.assertEqual(spawn.call_args.args[0][:3], ["forget", "--ip", ip])
+            self.store.release("refresh.lock")
+        with open(self.store.path("audit.log"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("forget-request ip=10.0.0.6 by=net@somaiya.edu status=failed", text)
+        self.assertIn("forget-request ip=10.9.0.1 by=net@somaiya.edu status=not-listed", text)
 
     def test_post_bodies_never_leak_into_the_next_request(self):
         """Regression (live): an answer sent before reading the POST body broke the next request on

@@ -37,7 +37,8 @@ def main(argv=None):
     f.add_argument("--ip", required=True)
     f.add_argument("--by", default="")
     f.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock
-    fg = sub.add_parser("forget", help="remove a Down switch from the dashboard and rebuild the snapshot")
+    fg = sub.add_parser("forget", help="remove a Down or SSH-failed switch (never a core seed) from the dashboard, "
+                                       "stop logging in to it, and rebuild the snapshot")
     fg.add_argument("--ip", required=True)
     fg.add_argument("--by", default="")
     fg.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)  # the API already took refresh.lock

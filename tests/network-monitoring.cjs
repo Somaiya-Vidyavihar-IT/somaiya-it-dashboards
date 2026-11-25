@@ -122,6 +122,8 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   assert.equal(none.el('web-only-panel').hidden,false);assert.ok(none.el('web-only-rows').innerHTML.includes('No Cisco web UI without SSH'),'Empty list says so');
   const noList=harness(API,(p,m)=>p==='/api/v1/snapshot'?{status:200,body:{...scanned,webOnly:undefined}}:team(p,m));await noList.connect();
   assert.equal(noList.el('scan-panel').hidden,false);assert.equal(noList.el('web-only-panel').hidden,true,'No list without the field');
+  const nullList=harness(API,(p,m)=>p==='/api/v1/snapshot'?{status:200,body:{...scanned,webOnly:null}}:team(p,m));await nullList.connect();
+  assert.equal(nullList.el('web-only-panel').hidden,true,'webOnly null (no scan yet): no list and no "none found"');
   // While the scan runs: one phase line with counts, not one row per address.
   const startedAt='2026-11-05T03:00:00Z',running=phase=>({status:200,body:{run:{state:'running',phase,startedAt,lastSuccessAt:snapshot.generatedAt},running:true,reachabilityAt:reach.checkedAt}});
   const sw=harness(API,(p,m)=>p==='/api/v1/status'?running('sweep'):p==='/api/v1/progress'?{status:200,body:{startedAt,finishedAt:null,phase:'sweep',sweepDone:4096,sweepTotal:12000,items:[]}}:team(p,m));await sw.connect();
@@ -254,7 +256,21 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const back=live({'10.0.1.7':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0},'10.0.1.8':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0}});await back.connect();
   {assert.ok(rowOf(back,'asw-07').includes('Answering again (read at the next full run)')&&rowOf(back,'asw-08').includes('Answering again (read at the next full run)'),'Answering again instead of Down');}
   vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",back.ctx);assert.ok(back.el('sw-count').textContent.startsWith('0 of 6'));
-  vm.runInContext("openDevice('10.0.1.7')",back.ctx);assert.equal(back.el('remove-switch').hidden,true,'No Remove while it answers again');assert.ok(!back.el('detail-body').innerHTML.includes('Down since'));}
+  vm.runInContext("openDevice('10.0.1.7')",back.ctx);assert.equal(back.el('remove-switch').hidden,true,'No Remove while it answers again');assert.ok(!back.el('detail-body').innerHTML.includes('Down since'));
+  // R10: an SSH-failed row (removable: true from the collector, never a core seed) can be removed too, so the collector stops logging in there.
+  const failDev={...downDev,ip:'10.0.1.9',hostname:'asw-09',status:'failed',flags:['ssh-failed'],error:'SSH authentication failed with all 2 credential sets',removable:true,downSince:undefined,lastUplinks:undefined,lastSeenOk:undefined};
+  const seedDev={...failDev,ip:'10.0.0.9',hostname:'core-09',removable:undefined};
+  current={...snapshot,summary:{...snapshot.summary,switches:6,failed:2},devices:[...snapshot.devices,failDev,seedDev]};
+  const f=harness(API,routes(4));await f.connect();
+  vm.runInContext("openDevice('10.0.0.9')",f.ctx);assert.equal(f.el('remove-switch').hidden,true,'A core seed whose login fails cannot be removed');
+  f.ctx.window.confirm=()=>true;await vm.runInContext('removeSwitch()',f.ctx);assert.ok(!f.calls.some(c=>c.url===API+'/api/v1/forget'),'removeSwitch does nothing for it either');
+  vm.runInContext("openDevice('10.0.1.9')",f.ctx);assert.equal(f.el('remove-switch').hidden,false,'SSH failed row of a known switch offers Remove');assert.equal(f.el('remove-switch').disabled,false);
+  assert.ok(f.el('remove-switch').title.includes('stop logging in'),f.el('remove-switch').title);
+  let q='';f.ctx.window.confirm=x=>{q=x;return true};forgetReply={status:202,body:{started:true,ip:'10.0.1.9'}};
+  await vm.runInContext('removeSwitch()',f.ctx);
+  assert.ok(q.includes('asw-09 (10.0.1.9)')&&q.includes('SSH login fails')&&q.includes('stop logging in to this address')&&q.includes('neighbour')&&q.includes('Cisco host'),q);
+  assert.equal(f.calls.filter(c=>c.url===API+'/api/v1/forget').pop().body,'{"ip":"10.0.1.9"}');
+  const f3=harness(API,routes(3));await f3.connect();vm.runInContext("openDevice('10.0.1.9')",f3.ctx);assert.equal(f3.el('remove-switch').hidden,true,'Not on an API without the endpoint');}
  // Topology diagram: the API's DOT file is laid out by Viz.js (stubbed here) and active SVG content is removed.
  {const removed=[],script={remove(){removed.push('script')}},title={textContent:'10.0.0.1'};
   const node={attributes:[{name:'xlink:href'},{name:'class'}],dataset:{},removeAttribute(n){removed.push(n)},querySelector:s=>s==='title'?title:null};

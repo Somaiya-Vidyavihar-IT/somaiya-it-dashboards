@@ -28,6 +28,10 @@ class FullRunOrchestration(unittest.TestCase):
             patcher = mock.patch(target, **kw)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Checks in these tests run seconds apart; the 5-minute rule has its own tests (gap patched back there).
+        patcher = mock.patch.object(known, "MIN_CHECK_GAP_SECONDS", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -452,7 +456,8 @@ class FullRunOrchestration(unittest.TestCase):
         before = store.read("latest.json")
         for ip in ("10.0.1.1", "10.0.1.50", "10.0.9.9"):
             self.assertEqual(run.forget_switch(self.cfg, ip, "net@somaiya.edu"), 1, ip)
-            self.assertIn("only a Down switch can be removed", store.read("refresh-status.json")["error"])
+            self.assertIn("only a Down switch or one whose SSH login fails can be removed",
+                          store.read("refresh-status.json")["error"])
         self.assertEqual(store.read("latest.json"), before)
         self.assertIn("10.0.1.1", known.load(store))
         self.assertFalse(store.running("refresh.lock"))
@@ -463,6 +468,130 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual(run.forget_switch(self.cfg, "10.0.1.1", "net@somaiya.edu"), 1)
         self.assertIn("full discovery run is in progress", store.read("refresh-status.json")["error"])
         store.release()
+
+    def test_forget_an_ssh_failed_switch_stops_logins(self):
+        """R10: Remove on an SSH-failed row: forgotten, off the dashboard, and no login unless found again."""
+        store = self._full_run()
+        failed = {"ip": "10.0.1.2", "ok": False, "error": "SSH authentication failed", "platform": "cisco_s300",
+                  "neighbors": [], "ports": [], "warnings": []}
+        self.assertEqual(self._refresh("10.0.1.2", failed)[0], 1)
+        self.assertEqual(self._status(store, "10.0.1.2"), "failed")
+        with mock.patch("netmon.devices.collect", side_effect=AssertionError("no login")), \
+                mock.patch("netmon.scan.probe", side_effect=AssertionError("no probe")):
+            self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 0)
+        self.assertIsNone(self._status(store, "10.0.1.2"))
+        self.assertNotIn("10.0.1.2", known.load(store))
+        self.assertNotIn("10.0.1.2", [r["ip"] for r in store.read("state", "last-run.json")["records"]])
+        with open(store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn("forget ip=10.0.1.2 by=net@somaiya.edu status=failed", fh.read())
+        # Next full run: it still answers tcp/22, but nothing lists it any more (not a neighbour, not swept).
+        saved = self.records
+        dsw = copy.deepcopy(saved["10.0.1.1"])
+        dsw["neighbors"] = [n for n in dsw["neighbors"] if n["name"] != "asw-02"]
+        self.records = {ip: r for ip, r in dict(saved, **{"10.0.1.1": dsw}).items() if ip != "10.0.1.2"}
+        logins = []
+        with mock.patch("netmon.devices.collect", side_effect=lambda ip, *a, **k: logins.append(ip) or copy.deepcopy(self.records[ip])):
+            self._full_run_logins_only(also_up=("10.0.1.2",))
+        self.records = saved
+        self.assertNotIn("10.0.1.2", logins, "the switch passwords no longer go to that address")
+        self.assertIsNone(self._status(store, "10.0.1.2"))
+
+    def _full_run_logins_only(self, also_up=()):
+        reachable = lambda ips, *a, **k: {ip: (1.0 if ip in self.records and ip != "10.0.1.3" or ip == "10.0.0.5"
+                                               or ip in also_up else None) for ip in ips}
+        with mock.patch("netmon.scan.probe", side_effect=reachable), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.creds.get", return_value=("nms", "p")), \
+                mock.patch("netmon.devices.detect_platform", side_effect=lambda ip, *a: self.records[ip]["platform"]), \
+                mock.patch("netmon.wlc.collect", return_value=copy.deepcopy(WLC[0])):
+            self.assertEqual(run.full_run(self.cfg), 0)
+
+    def test_forget_refuses_a_seed(self):
+        store = self._full_run()
+        failed = {"ip": "10.0.1.2", "ok": False, "error": "SSH authentication failed", "platform": "cisco_s300",
+                  "neighbors": [], "ports": [], "warnings": []}
+        self._refresh("10.0.1.2", failed)
+        cfg = dict(self.cfg, collector=dict(self.cfg["collector"], seeds=["10.0.1.2"]))
+        self.assertEqual(run.forget_switch(cfg, "10.0.1.2", "net@somaiya.edu"), 1)
+        self.assertIn("core seed", store.read("refresh-status.json")["error"])
+        self.assertEqual(self._status(store, "10.0.1.2"), "failed")
+
+    def test_up_down_check_is_written_before_the_sweep(self):
+        """IMPORTANT 2: known switches are probed first and reachability.json is written at once; the sweep
+        that follows does not probe them again and never overwrites a 15-minute check made meanwhile."""
+        store = self._full_run()
+        saved = self.records
+        dsw = copy.deepcopy(saved["10.0.1.1"])
+        dsw["neighbors"] = [n for n in dsw["neighbors"] if n["name"] != "asw-02"]
+        self.records = {ip: r for ip, r in dict(saved, **{"10.0.1.1": dsw}).items() if ip != "10.0.1.2"}
+        calls = []
+        later = {"checkedAt": "2026-11-25T02:45:00Z", "results": {"10.0.1.2": {"up": True, "since": "2026-11-25T02:45:00Z",
+                                                                               "latencyMs": 1.0, "misses": 0}}}
+
+        def probe(ips, port=22, *a, **k):
+            ips = list(ips)
+            calls.append((port, ips, store.read("reachability.json")))
+            if port == 443:  # a 15-minute check finishes while the sweep is still on the web ports
+                store.write(later, "reachability.json")
+            return {ip: (1.0 if ip in self.records and ip != "10.0.1.3" or ip == "10.0.0.5" else None) for ip in ips}
+        try:
+            with mock.patch("netmon.scan.probe", side_effect=probe), \
+                    mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                    mock.patch("netmon.creds.get", return_value=("nms", "p")), \
+                    mock.patch("netmon.devices.detect_platform", side_effect=lambda ip, *a: self.records[ip]["platform"]), \
+                    mock.patch("netmon.devices.collect", side_effect=lambda ip, *a, **k: copy.deepcopy(self.records[ip])), \
+                    mock.patch("netmon.wlc.collect", return_value=copy.deepcopy(WLC[0])):
+                self.assertEqual(run.full_run(self.cfg), 0)
+        finally:
+            self.records = saved
+        port, first, _ = calls[0]
+        self.assertEqual(port, 22)
+        self.assertIn("10.0.1.2", first, "known switches first")
+        self.assertNotIn("10.0.0.2", first, "not the sweep-only addresses")
+        sweep = next((ips, reach) for p, ips, reach in calls if p == 22 and "10.0.0.2" in ips)
+        self.assertNotIn("10.0.0.1", sweep[0], "a switch already probed is not probed again")
+        self.assertEqual((sweep[1]["results"]["10.0.1.2"]["up"], sweep[1]["results"]["10.0.1.2"]["misses"]), (False, 1),
+                         "written before the sweep starts")
+        self.assertEqual(store.read("reachability.json"), later, "not overwritten by the run's older result")
+
+    def test_run_and_check_seconds_apart_count_one_miss(self):
+        """IMPORTANT 2: the 08:00 run and the 08:00 15-minute check do not make 2 misses in a row."""
+        store = self._full_run()
+        with mock.patch.object(known, "MIN_CHECK_GAP_SECONDS", 300):
+            self._reach({"10.0.1.2": None})
+            self._full_run_asw_gone()
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 1)
+        self.assertEqual(self._status(store, "10.0.1.2"), "unreachable")
+
+    def test_excluded_or_out_of_scope_known_switch(self):
+        """MINOR 3: never probed, never listed, and it can be removed from known-switches.json."""
+        store = self._full_run()
+        entries = known.load(store)
+        entries["10.0.1.9"] = dict(entries["10.0.1.2"], ip="10.0.1.9", hostname="asw-09")
+        entries["10.9.0.1"] = dict(entries["10.0.1.2"], ip="10.9.0.1", hostname="old-sw")
+        known.save(store, entries)
+        self.cfg = config.validate({
+            "collector": {"switch_username": "u", "data_dir": self.tmp.name, "exclude": ["10.0.1.9/32"]},
+            "subnets": [{"cidr": "10.0.0.0/30", "institute": "DC"}, {"cidr": "10.0.1.0/24", "institute": "Engineering", "sweep": False}],
+            "wlc": {"hosts": ["10.0.0.5"]}})
+        probed = self._reach({})
+        self.assertFalse({"10.0.1.9", "10.9.0.1"} & set(probed), "the 15-minute check skips them")
+        self._full_run()
+        self.assertIsNone(self._status(store, "10.0.1.9"))
+        self.assertIsNone(self._status(store, "10.9.0.1"))
+        for ip in ("10.0.1.9", "10.9.0.1"):
+            self.assertEqual(run.forget_switch(self.cfg, ip, "net@somaiya.edu"), 0, ip)
+            self.assertNotIn(ip, known.load(store))
+
+    def test_first_run_with_v3_remembers_the_previous_snapshot(self):
+        """MINOR 4: no known-switches.json yet: seeded from the previous latest.json, so a switch that is off
+        during the first v3 run is still listed (Not answering) instead of forgotten."""
+        store = self._full_run()
+        os.remove(store.path("state", "known-switches.json"))
+        self._full_run_asw_gone()
+        dev = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual((dev["status"], dev["hostname"], dev["lastUplinks"][0]["name"]), ("unreachable", "asw-02", "dsw-01"))
+        self.assertIn("10.0.1.2", known.load(store))
 
     # ---- Cisco-only campus scan ----
     def _scan_cfg(self, **col):

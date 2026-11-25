@@ -71,6 +71,59 @@ class KnownSwitches(unittest.TestCase):
         for status in ("ok", "failed", "no-ssh", None):
             self.assertFalse(known.is_down(status, m(5)), status)
 
+    def test_two_probes_minutes_apart_count_as_one_miss(self):
+        """IMPORTANT 2: a check less than 5 minutes after the last one does not add a second miss."""
+        r1 = known.apply_probe({}, {"10.0.0.1": None, "10.0.0.2": 1.0}, "2026-11-25T02:30:00Z")
+        self.assertEqual(r1["10.0.0.1"]["misses"], 1)
+        r2 = known.apply_probe(r1, {"10.0.0.1": None, "10.0.0.2": None}, "2026-11-25T02:30:40Z",
+                               prev_checked_at="2026-11-25T02:30:00Z")
+        self.assertEqual(r2["10.0.0.1"]["misses"], 1, "08:00 run and 08:00 check: still one miss")
+        self.assertEqual((r2["10.0.0.2"]["up"], r2["10.0.0.2"]["misses"]), (False, 1), "a first miss always counts")
+        r3 = known.apply_probe(r2, {"10.0.0.1": None}, "2026-11-25T02:35:00Z", prev_checked_at="2026-11-25T02:30:40Z")
+        self.assertEqual(r3["10.0.0.1"]["misses"], 1, "4 min 20 s later: still too close")
+        r4 = known.apply_probe(r3, {"10.0.0.1": None}, "2026-11-25T02:45:00Z", prev_checked_at="2026-11-25T02:35:00Z")
+        self.assertEqual((r4["10.0.0.1"]["misses"], r4["10.0.0.1"]["since"]), (2, "2026-11-25T02:30:00Z"))
+        r5 = known.apply_probe(r4, {"10.0.0.1": 1.0}, "2026-11-25T02:46:00Z", prev_checked_at="2026-11-25T02:45:00Z")
+        self.assertEqual(r5["10.0.0.1"]["misses"], 0, "an answer always resets")
+        r6 = known.apply_probe(r4, {"10.0.0.1": None}, "2026-11-25T02:50:00Z", prev_checked_at="not a time")
+        self.assertEqual(r6["10.0.0.1"]["misses"], 3, "unreadable checkedAt: counted as usual")
+
+    def test_forget_refusal(self):
+        """R7/R8 for Down rows; R10: an SSH-failed row can be removed too; seeds never; out of scope always."""
+        m = lambda n: {"up": n == 0, "since": "T", "latencyMs": None, "misses": n}
+        remembered = {"10.0.1.2": {}, "10.0.1.3": {}, "10.0.0.1": {}, "10.9.0.1": {}}
+        seeds = ["10.0.0.1"]
+        ok = lambda ip, status, live=None, scope=True: known.forget_refusal(ip, status, live, remembered, seeds, scope)
+        self.assertIsNone(ok("10.0.1.2", "down"))
+        self.assertIsNone(ok("10.0.1.2", "down", m(2)))
+        self.assertIsNone(ok("10.0.1.3", "failed"), "SSH failed row of a known switch")
+        self.assertIsNone(ok("10.0.1.4", "failed"), "every SSH-failed row is a switch the next run logs in to")
+        self.assertIsNone(ok("10.9.0.1", None, scope=False), "a known switch now out of scope or excluded")
+        for ip, status, live in (("10.0.1.2", "down", m(1)), ("10.0.1.2", "down", m(0)), ("10.0.1.2", "unreachable", m(3)),
+                                 ("10.0.1.2", "ok", None), ("10.0.1.2", "no-ssh", None), ("10.0.9.9", None, None)):
+            msg = ok(ip, status, live)
+            self.assertIn("only a Down switch or one whose SSH login fails can be removed", msg or "", (ip, status, live))
+        self.assertIsNotNone(ok("10.0.9.9", None, scope=False), "out of scope but never known")
+        for status in ("down", "failed", None):
+            self.assertIn("core seed", ok("10.0.0.1", status, m(5), scope=status is not None) or "", status)
+
+    def test_seed_from_previous_snapshot(self):
+        """MINOR 4: the first v3 run remembers every switch the previous run listed as read or SSH failed."""
+        devs = [{"ip": "10.0.1.1", "hostname": "dsw-01", "model": "X", "serial": "S1", "version": "1", "institute": "E",
+                 "role": "distribution", "platform": "cisco_ios", "status": "ok",
+                 "neighbors": [{"localPort": "Te1/1/4", "name": "core-01", "ip": "10.0.0.1", "remotePort": "Eth1/10",
+                                "kind": "switch"}, {"localPort": "Gi1/0/5", "name": "ap-1", "ip": "", "kind": "ap"}]},
+                {"ip": "10.0.1.3", "hostname": "", "status": "failed", "neighbors": []},
+                {"ip": "10.0.1.50", "hostname": "asw-50", "status": "no-ssh", "neighbors": []}]
+        out = known.seed_from_snapshot({"generatedAt": "2026-11-20T02:30:00Z", "devices": devs})
+        self.assertEqual(sorted(out), ["10.0.1.1", "10.0.1.3"])
+        dsw = out["10.0.1.1"]
+        self.assertEqual((dsw["hostname"], dsw["role"], dsw["platform"], dsw["lastSeenOk"], dsw["firstSeen"]),
+                         ("dsw-01", "distribution", "cisco_ios", "2026-11-20T02:30:00Z", "2026-11-20T02:30:00Z"))
+        self.assertEqual(dsw["uplinks"], [{"localPort": "Te1/1/4", "name": "core-01", "ip": "10.0.0.1", "remotePort": "Eth1/10"}])
+        self.assertIsNone(out["10.0.1.3"]["lastSeenOk"])
+        self.assertEqual(known.seed_from_snapshot({}), {})
+
     def test_load_save_and_forget(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(tmp)

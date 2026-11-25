@@ -340,6 +340,22 @@ class UplinkParsers(unittest.TestCase):
         self.assertEqual(parse.port_channels("cisco_nxos", fx.NXOS_PORT_CHANNEL_SUMMARY),
                          {"Po10": ["Eth1/49", "Eth1/50"], "Po20": ["Eth1/51", "Eth1/52", "Eth1/53"]})
 
+    def test_mgig_ports_join_cdp_and_bundle_members(self):
+        """MINOR 5: IOS-XE multigigabit ports (2.5G Tw, 5G Fi) in CDP/LLDP and in the bundle summary."""
+        from netmon import uplinks
+        for raw, want in {"TwoGigabitEthernet1/0/1": "Tw1/0/1", "Tw1/0/1": "Tw1/0/1", "tw1/0/2": "Tw1/0/2",
+                          "FiveGigabitEthernet1/0/3": "Fi1/0/3", "Fi1/0/3": "Fi1/0/3", "fi1/0/4": "Fi1/0/4",
+                          "TwentyFiveGigE1/1/1": "Twe1/1/1", "Twe1/1/1": "Twe1/1/1"}.items():
+            self.assertEqual(parse.short_if(raw), want, raw)
+        text = ("Group  Port-channel  Protocol    Ports\n"
+                "------+-------------+-----------+-----------------------------------------------\n"
+                "3      Po3(SU)         LACP      Tw1/0/47(P)     Fi1/0/48(P)\n")
+        self.assertEqual(parse.port_channels("cisco_ios", text), {"Po3": ["Tw1/0/47", "Fi1/0/48"]})
+        selected = [{"port": parse.short_if("TwoGigabitEthernet1/0/47"), "neighbor": "dsw-test-01"},
+                    {"port": parse.short_if("FiveGigabitEthernet1/0/48"), "neighbor": "dsw-test-01"}]
+        self.assertEqual([t[:3] for t in uplinks._plan(selected, {"Po3": ["Tw1/0/47", "Fi1/0/48"]})],
+                         [("Po3", "bundle", "Po3"), ("Tw1/0/47", "member", "Po3"), ("Fi1/0/48", "member", "Po3")])
+
 
 if __name__ == "__main__":
     unittest.main()

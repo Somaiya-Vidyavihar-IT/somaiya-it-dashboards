@@ -21,13 +21,13 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import known
+from . import config as config_mod, known
 from .store import Store
 
 log = logging.getLogger("netmon.server")
 TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
 # 2: POST /api/v1/refresh (single-switch refresh); 3: /api/v1/cctv/* (CCTV dashboard);
-# 4: POST /api/v1/forget (Remove a Down switch). GET /api/v1/uplinks came in the same release (no bump:
+# 4: POST /api/v1/forget (Remove a Down or SSH-failed switch). GET /api/v1/uplinks came in the same release (no bump:
 # the page treats a 404 from it as "no data yet").
 API_VERSION = 4
 NETWORK_REFUSAL = "This account is not on the IT Network Team list for the network dashboard."
@@ -293,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(202, {"started": True, "ip": ip})
 
     def _forget(self, body):
-        """Remove a Down switch from the dashboard (Remove). Same lock as a refresh: one at a time."""
+        """Remove a Down or SSH-failed switch from the dashboard (Remove). Same lock as a refresh: one at a time."""
         email = self._auth()
         if not email:
             return
@@ -304,10 +304,15 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.store
         if store.running():
             return self._error(409, "A full discovery run is in progress. Remove the switch when it finishes.")
-        # R7: only a row the snapshot lists as Down that the latest up/down check has not seen answer since.
+        # R7/R8: a row the snapshot lists as Down that the latest up/down check has not seen answer since;
+        # R10: or a row whose SSH login fails; or a known switch now out of scope. Never a core seed.
         live = ((store.read("reachability.json", default={}) or {}).get("results") or {}).get(ip)
-        if not known.is_down(self.server.switch_status(ip), live):
-            return self._error(404, "This address is not listed as Down on the dashboard; only a Down switch can be removed.")
+        status = self.server.switch_status(ip)
+        cfg = self.server.cfg
+        refusal = known.forget_refusal(ip, status, live, known.load(store), cfg["collector"]["seeds"],
+                                       config_mod.in_scope(cfg, ip))
+        if refusal:
+            return self._error(404, refusal)
         if not store.acquire({"ip": ip, "by": email, "action": "forget"}, "refresh.lock"):
             busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"
             return self._error(409, f"{busy} is being refreshed or removed. Try again when it finishes.")
@@ -321,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
                          "error": "The collector could not be started on the server."}, "refresh-status.json")
             log.exception("Could not start removing %s", ip)
             return self._error(500, "The collector could not be started on the server.")
-        store.audit(f"forget-request ip={ip} by={email} from={self.client_address[0]}")
+        store.audit(f"forget-request ip={ip} by={email} status={status or 'not-listed'} from={self.client_address[0]}")
         self._send(202, {"started": True, "ip": ip})
 
 

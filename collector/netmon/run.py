@@ -104,8 +104,9 @@ def _discover(cfg, store, trigger, by, started):
     # log in first time and do not generate repeated failed logins against TACACS+.
     cred_of = store.read("state", "credentials.json", default={}) or {}
 
-    # 1. Campus IP scan: tcp/22 over the sweep-enabled subnets plus seeds, last run's devices and known
-    #    switches; the web ports (collector.scan_ports: 443, 80) over the scan-only addresses.
+    # 1. Campus IP scan. First tcp/22 to the seeds, last run's devices and known switches (also this run's
+    #    up/down check, written at once); then tcp/22 over the rest of the sweep-enabled subnets and the
+    #    web ports (collector.scan_ports: 443, 80) over the scan-only addresses.
     progress = Progress(store, started, trigger, by)
     targets = list(scan.sweep_targets(cfg))
     previous = store.read("latest.json", default={}) or {}
@@ -116,23 +117,38 @@ def _discover(cfg, store, trigger, by, started):
     phones |= {d["ip"] for d in previous.get("devices", []) if build.is_phone_model({"name": d.get("hostname") or ""}, phone_re)}
     known = [d["ip"] for d in previous.get("devices", []) if d["ip"] not in phones]
     # Switches read on any earlier run (Down ones included) are probed too, until a team member removes them.
-    remembered = known_mod.load(store)
+    if known_mod.exists(store):
+        remembered = known_mod.load(store)
+    else:  # first run with this collector: remember what the previous run listed as read or SSH failed
+        remembered = known_mod.seed_from_snapshot(
+            dict(previous, devices=[d for d in previous.get("devices", []) if d.get("ip") not in phones]))
+        if remembered:
+            known_mod.save(store, remembered)
     known += [ip for ip in remembered if ip not in phones and ip not in known]
     hints = {}
     for d in previous.get("devices", []):
         _add_hints(hints, d.get("neighbors"))
-    extra = [ip for ip in list(col["seeds"]) + known if config_mod.in_scope(cfg, ip)]
+    # Out of scope or excluded addresses are never probed (MINOR 3), known switches included.
+    extra = list(dict.fromkeys(ip for ip in list(col["seeds"]) + known if config_mod.in_scope(cfg, ip)))
     # Seeds, last run's devices and known switches are switches already: no Cisco check for them.
     # Every other address is "scan-only" and gets the switch passwords only if it identifies as Cisco.
-    trusted = set(col["seeds"]) | set(known)
+    trusted = set(extra)
     scan_only = [ip for ip in targets if ip not in trusted]
     scan_only_set = set(scan_only)
-    first = list(dict.fromkeys(targets + extra))
+    rest = [ip for ip in dict.fromkeys(targets) if ip not in trusted]
     web_ports = [p for p in col["scan_ports"] if p != 22]
-    sweep = {"sweepDone": 0, "sweepTotal": len(first) + len(scan_only) * len(web_ports)}
+    sweep = {"sweepDone": 0, "sweepTotal": len(extra) + len(rest) + len(scan_only) * len(web_ports)}
     progress.write(force=True, phase="sweep", **sweep)
-    log.info("Scanning %d addresses on tcp/22 and %d on %s", len(first), len(scan_only), web_ports)
-    probes = _probe_steps(first, 22, col, progress, sweep)
+    log.info("Checking %d known switches, then scanning %d addresses on tcp/22 and %d on %s",
+             len(extra), len(rest), len(scan_only), web_ports)
+    # 1a. Up/down check of the switches the 15-minute check watches, applied and written before the
+    #     sweep (which takes minutes), so a switch that missed the last check and this one is Down now
+    #     and a 15-minute check made during the sweep is never overwritten by an older result.
+    probes = _probe_steps(extra, 22, col, progress, sweep)
+    watched = {d["ip"] for d in previous.get("devices", []) if d.get("status") != "no-ssh"} | set(remembered)
+    _apply_reach(store, {ip: probes[ip] for ip in watched if ip in probes}, keep_others=True)
+    # 1b. The rest of the campus.
+    probes.update(_probe_steps(rest, 22, col, progress, sweep))
     web_open = {}  # scan-only ip -> web ports that answered
     for port in web_ports:
         for ip, lat in _probe_steps(scan_only, port, col, progress, sweep).items():
@@ -142,13 +158,6 @@ def _discover(cfg, store, trigger, by, started):
     # Only addresses that matter later (Reconnect, no-SSH rows): never the scan-only ones. Neighbours
     # that do not answer are added by the crawl below.
     closed = {ip for ip, lat in probes.items() if lat is None and ip not in scan_only_set}
-    # This probe is an up/down check too: the same switches the 15-minute check watches get their
-    # miss counters updated, so a switch that missed the last check and this one is Down now.
-    watched = {d["ip"] for d in previous.get("devices", []) if d.get("status") != "no-ssh"} | set(remembered)
-    reach_prev = (store.read("reachability.json", default={}) or {}).get("results", {}) or {}
-    reach = dict(reach_prev, **known_mod.apply_probe(
-        reach_prev, {ip: probes[ip] for ip in watched if ip in probes}, build.iso_now()))
-    store.write({"checkedAt": build.iso_now(), "results": reach}, "reachability.json")
 
     # Cisco check (identify): banner / web page of the scan-only hosts, read without logging in.
     cisco_ssh, web_only, skipped = _cisco_gate(cfg, [ip for ip in open_ips if ip in scan_only_set], web_open)
@@ -246,6 +255,9 @@ def _discover(cfg, store, trigger, by, started):
     prev_counters = store.read("state", "counters.json", default={}) or {}
     # Read again just before use: a Remove that finished as this run was starting must not bring the switch back.
     remembered = known_mod.load(store)
+    # Up/down results as they are now: this run's own check (step 1a) and any 15-minute check since.
+    # (Never the crawl's neighbour probe: that is nb_probe above.)
+    reach = _reach_results(store)
     snapshot, baseline, counters = build.build(
         cfg, records, wlcs, store.read("state", "links-baseline.json", default={}),
         prev_counters, scan_info,
@@ -263,6 +275,20 @@ def _discover(cfg, store, trigger, by, started):
                  "records": records, "wlcs": wlcs, "closed": sorted(closed), "countersBase": prev_counters,
                  "webOnly": web_only}, "state", "last-run.json")
     return snapshot
+
+
+def _apply_reach(store, probe_results, keep_others):
+    """Apply one tcp/22 check to reachability.json and write it. The file is read right before the
+    write (after the probe), so a check that finished meanwhile is counted, not overwritten.
+    keep_others: keep results of addresses this check did not probe (full run: WLCs, no-SSH rows)."""
+    cur = store.read("reachability.json", default={}) or {}
+    prev = cur.get("results") or {}
+    now = build.iso_now()
+    out = known_mod.apply_probe(prev, probe_results, now, prev_checked_at=cur.get("checkedAt"))
+    if keep_others:
+        out = dict(prev, **out)
+    store.write({"checkedAt": now, "results": out}, "reachability.json")
+    return out
 
 
 def _probe_steps(ips, port, col, progress, sweep):
@@ -473,13 +499,14 @@ def refresh_switch(cfg, ip, by="", locked=False):
 
 
 def forget_switch(cfg, ip, by="", locked=False):
-    """Remove a Down switch from the dashboard (Remove): forget it and rebuild the snapshot without it.
+    """Remove a switch from the dashboard (Remove): forget it and rebuild the snapshot without it.
 
-    Only a switch the snapshot lists as Down can be removed (known.is_down, R7: status "down" and the
-    latest up/down check has not seen it answer since). No login and no probe; the
-    snapshot is rebuilt from state/last-run.json like refresh_switch. If the switch answers tcp/22
-    again later, a full run finds it like any other switch (subnet sweep, seed or CDP/LLDP neighbour).
-    Shares refresh.lock with refresh_switch.
+    Allowed (known.forget_refusal): a row the snapshot lists as Down (R7/R8), a row whose SSH login
+    fails (R10), or a known switch now out of scope or excluded; never a core seed. The switch is
+    dropped from known-switches.json and from the last run's records, so the next full run no longer
+    logs in to the address unless it finds it again as a CDP/LLDP neighbour or as a Cisco host in the
+    subnet scan. No login and no probe; the snapshot is rebuilt from state/last-run.json like
+    refresh_switch. Shares refresh.lock with refresh_switch.
     """
     store = Store(cfg["collector"]["data_dir"])
     if not locked and not store.acquire({"ip": ip, "by": by, "action": "forget"}, "refresh.lock"):
@@ -492,20 +519,27 @@ def forget_switch(cfg, ip, by="", locked=False):
         if store.running():
             raise RefreshRefused("A full discovery run is in progress. Remove the switch when it finishes.")
         latest = store.read("latest.json", default={}) or {}
-        row = next((d for d in latest.get("devices", []) if d.get("ip") == ip), None)
-        if not row or not known_mod.is_down(row.get("status"), _reach_results(store).get(ip)):
-            raise RefreshRefused(f"{ip} is not listed as Down; only a Down switch can be removed.")
+        row = next((d for d in latest.get("devices", []) if d.get("ip") == ip), None) or {}
+        remembered = known_mod.load(store)
+        status = row.get("status")
+        refusal = known_mod.forget_refusal(ip, status, _reach_results(store).get(ip), remembered,
+                                           cfg["collector"]["seeds"], config_mod.in_scope(cfg, ip))
+        if refusal:
+            raise RefreshRefused(refusal)
         last = store.read("state", "last-run.json", default=None)
         if not last:
             raise RefreshRefused("Removing a switch needs one full discovery run with the updated collector first.")
-        remembered = known_mod.load(store)
         known_mod.forget(remembered, ip)
         known_mod.save(store, remembered)
+        # An SSH-failed switch is a record of the last run: drop it, so the rebuilt latest.json (which the
+        # next run trusts) no longer lists it.
+        records = [r for r in last["records"] if r["ip"] != ip]
+        last = dict(last, closed=[c for c in last.get("closed", []) if c != ip])
         now = build.iso_now()
-        _rebuild_from_last(store, cfg, last["records"], last, now)
+        _rebuild_from_last(store, cfg, records, last, now)
         store.write(dict(head, state="done", finishedAt=build.iso_now(), ok=True, error=None,
                          hostname=row.get("hostname", ""), snapshotRefreshedAt=now), "refresh-status.json")
-        store.audit(f"forget ip={ip} by={by or '-'}")
+        store.audit(f"forget ip={ip} by={by or '-'} status={status or 'not-listed'}")
         return 0
     except Exception as exc:
         if not isinstance(exc, RefreshRefused):
@@ -528,12 +562,11 @@ def reach_run(cfg):
     # "no-ssh" switches are known not to answer tcp/22; Reconnect or the next full run re-checks them.
     ips = [d["ip"] for d in latest.get("devices", []) if d.get("status") != "no-ssh"]
     ips += [ip for ip in known_mod.load(store) if ip not in listed]
+    # Never an address that is now out of scope or excluded (MINOR 3); the WLCs are configured by hand.
+    ips = [ip for ip in dict.fromkeys(ips) if config_mod.in_scope(cfg, ip)]
     ips += [h for h in cfg["wlc"]["hosts"] if h not in ips]
     results = scan.probe(ips, 22, max(col["connect_timeout"], 2.0), 256)
-    prev = (store.read("reachability.json", default={}) or {}).get("results", {})
-    now = build.iso_now()
-    out = known_mod.apply_probe(prev, results, now)
-    store.write({"checkedAt": now, "results": out}, "reachability.json")
+    out = _apply_reach(store, results, keep_others=False)
     down = sum(not v["up"] for v in out.values())
     log.info("Reachability: %d checked, %d down", len(out), down)
     return 0

@@ -83,7 +83,9 @@ Register-ScheduledTask -TaskName 'netmon-reach' -Action (New-NetmonAction 'reach
   -User $ServiceAccount -Password $pw -RunLevel Limited -Description 'TCP/22 up/down check of known switches every 15 minutes' -Force | Out-Null
 
 # Uplink load: core/distribution every round, other switches every 30 minutes (read-only show commands).
-# Stopped after 9 minutes so a slow round never overlaps the next one.
+# Stopped after 9 minutes so a slow round never overlaps the next one. The poller starts no switch after
+# 7 minutes and writes its results as it goes, so a stopped round keeps what it read; its lock counts as
+# stale after 9.5 minutes, so the next start runs (LastTaskResult 0x41306 = stopped at the time limit).
 $uplinkTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 10)
 $uplinkSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 9)
 Register-ScheduledTask -TaskName 'netmon-uplinks' -Action (New-NetmonAction 'uplinks') -Trigger $uplinkTrigger -Settings $uplinkSettings `

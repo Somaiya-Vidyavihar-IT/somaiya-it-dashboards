@@ -4,11 +4,13 @@ Core and distribution switches are read every round (uplink_fast_minutes); other
 last read is at least uplink_slow_minutes old. Uplinks are the ports with a switch neighbour (for
 access and unlinked switches: only neighbours that are collected switches or say Cisco). Port-channel
 bundles and their member ports are both reported. Read-only: one login per switch with the credential
-set that worked last time, then only 'show' commands. Writes data/uplinks.json for the dashboard.
+set that worked last time, then only 'show' commands. Writes data/uplinks.json for the dashboard
+during the round as well as at its end, so a round stopped at the 9-minute task limit loses nothing.
 """
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 
 from . import creds, devices, parse
@@ -33,6 +35,10 @@ SX_NOT_READ = "Not read yet (command to be confirmed)"
 NO_LOGIN = "No working login known yet"
 LOCK = "uplinks.lock"
 GRACE_SECONDS = 30  # a scheduled start a few seconds early must not skip a 10-minute round
+# Task Scheduler stops the task at 9 minutes: no switch is started after 7, so the ones in progress
+# can finish and be written. Results are also written every SAVE_EVERY switches during the round.
+BUDGET_SECONDS = 7 * 60
+SAVE_EVERY = 10
 
 
 def safe_port(port):
@@ -211,11 +217,22 @@ def _iso(dt):
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def poll(cfg, now=None):
-    """One round: read the switches that are due and write uplinks.json. 0 done, 1 failed, 2 another round running."""
+def order(todo, polled):
+    """Core and distribution first, then the others; within each, never read first, then the oldest read."""
+    return sorted(todo, key=lambda d: (d.get("role") not in ("core", "distribution"), polled.get(d["ip"]) or ""))
+
+
+def poll(cfg, now=None, clock=time.monotonic, budget=None):
+    """One round: read the switches that are due and write uplinks.json. 0 done, 1 failed, 2 another round running.
+
+    Task Scheduler stops the task after 9 minutes, so a round never relies on reaching its end: results
+    are written every SAVE_EVERY switches, no new switch is started after `budget` seconds (BUDGET_SECONDS),
+    and the switches left over are the oldest read, so they come first in the next round."""
     col = cfg["collector"]
     store = Store(col["data_dir"])
     now = now or datetime.now(timezone.utc)
+    budget = BUDGET_SECONDS if budget is None else budget
+    t0 = clock()
     at = _iso(now)
     if not store.acquire({"startedAt": at}, LOCK):
         log.warning("Another uplink round is in progress; exiting")
@@ -229,7 +246,9 @@ def poll(cfg, now=None):
         # R2: only switches the last run read (status ok); Down, failed and no-SSH rows are not logged in to.
         switches = [d for d in latest.get("devices", []) if d.get("status") == "ok" and d.get("ip")]
         collected = {d["ip"] for d in switches}
-        todo = [d for d in switches if select_ports(d, collected) and due(d, polled, now, cfg)]
+        # Switches with uplinks to read; one with none any more lists no rows (its old ones are not carried).
+        with_ports = {d["ip"] for d in switches if select_ports(d, collected)}
+        todo = order([d for d in switches if d["ip"] in with_ports and due(d, polled, now, cfg)], polled)
         logins = {}
         if any(cred_of.get(d["ip"]) for d in todo):
             logins = {name: (user, pw) for name, user, pw in creds.switch_sets(cfg)}
@@ -244,20 +263,49 @@ def poll(cfg, now=None):
             # Only the set that worked last time: never try the others (no failed logins against TACACS+).
             return d["ip"], poll_switch(d, platform, logins.get(cred_of.get(d["ip"])), cfg, collected, at)
 
-        fresh = {}
-        if todo:
-            with ThreadPoolExecutor(max_workers=col["uplink_workers"]) as pool:
-                fresh = dict(pool.map(work, todo))
         carried = {}
         for r in previous.get("ports", []):
             carried.setdefault(r.get("ip"), []).append(r)
-        ports = []
-        for d in switches:
-            ports += fresh[d["ip"]] if d["ip"] in fresh else carried.get(d["ip"], [])
         polled = {ip: t for ip, t in polled.items() if ip in collected}
-        polled.update({ip: at for ip in fresh})
-        store.write({"checkedAt": at, "threshold": col["uplink_threshold"], "ports": ports}, "uplinks.json")
-        store.write(polled, "state", "uplinks-polled.json")
+        fresh = {}
+
+        def save():
+            ports = []
+            for d in switches:
+                if d["ip"] in fresh:
+                    ports += fresh[d["ip"]]
+                elif d["ip"] in with_ports:
+                    ports += carried.get(d["ip"], [])
+            store.write({"checkedAt": at, "threshold": col["uplink_threshold"], "ports": ports}, "uplinks.json")
+            store.write(dict(polled, **{ip: at for ip in fresh}), "state", "uplinks-polled.json")
+            return ports
+
+        # Switches are started one by one (never queued all at once) so none starts after the budget.
+        queue, pending, unsaved, out_of_time = iter(todo), set(), 0, False
+        with ThreadPoolExecutor(max_workers=col["uplink_workers"]) as pool:
+            while True:
+                while not out_of_time and len(pending) < col["uplink_workers"]:
+                    if clock() - t0 >= budget:
+                        out_of_time = True
+                        break
+                    d = next(queue, None)
+                    if d is None:
+                        break
+                    pending.add(pool.submit(work, d))
+                if not pending:
+                    break
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    ip, rows = fut.result()  # poll_switch never raises
+                    fresh[ip] = rows
+                    unsaved += 1
+                if unsaved >= SAVE_EVERY:
+                    save()
+                    unsaved = 0
+        ports = save()
+        if len(fresh) < len(todo):
+            log.warning("Uplinks: time budget of %d s used up; %d switches left for the next round (read first then)",
+                        budget, len(todo) - len(fresh))
         log.info("Uplinks: %d switches read, %d ports listed, %d at or over %s%% out", len(fresh), len(ports),
                  sum(bool(p.get("alert")) for p in ports), col["uplink_threshold"])
         return 0

@@ -6,7 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 LOCK_STALE_SECONDS = 3 * 3600
 REFRESH_STALE_SECONDS = 15 * 60  # one switch: login + about a dozen show commands
-UPLINKS_STALE_SECONDS = 10 * 60  # the uplink task is stopped by Task Scheduler after 9 minutes
+# The uplink task is stopped by Task Scheduler after 9 minutes and starts every 10: a lock older than
+# 9.5 minutes was left by a stopped round, so the next start (about 600 s later) takes it over.
+UPLINKS_STALE_SECONDS = 570
+WRITE_TRIES, WRITE_RETRY_SECONDS = 5, 0.2
 
 
 def _stale(name):
@@ -34,7 +37,20 @@ class Store:
         tmp = f"{target}.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-        os.replace(tmp, target)
+        # On Windows the replace fails (access denied) while another process (API, uplink poller, a
+        # run) has the target open for reading; that lasts milliseconds, so try again a few times.
+        for attempt in range(WRITE_TRIES):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError:
+                if attempt == WRITE_TRIES - 1:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    raise
+                time.sleep(WRITE_RETRY_SECONDS)
 
     # ---- one run at a time (scheduled and Run now share run.lock; a single-switch refresh uses
     # refresh.lock, so one refresh runs at a time and a full run is never blocked by one) ----

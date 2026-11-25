@@ -249,7 +249,19 @@ class CampusScan(unittest.TestCase):
         self.assertEqual(snap["scan"], scan)
         self.assertEqual(snap["webOnly"], [dict(web_only[0], institute="Engineering"), dict(web_only[1], institute="Campus")])
         self.assertNotIn("10.0.1.20", [d["ip"] for d in snap["devices"]], "web-only hosts are not switches")
-        self.assertEqual(build.build(CFG, campus(), WLC)[0]["webOnly"], [], "older callers: empty list")
+        self.assertEqual(build.build(CFG, campus(), WLC, web_only=[])[0]["webOnly"], [], "a scan that found none")
+        self.assertIsNone(build.build(CFG, campus(), WLC)[0]["webOnly"], "no scan yet (older last-run.json): no list")
+
+    def test_ssh_failed_rows_are_removable_except_seeds(self):
+        """R10: the team may Remove a switch whose login fails, so the collector stops logging in to it."""
+        snap = build.build(CFG, campus(), WLC, now="2026-11-05T02:30:00Z")[0]
+        dev = {d["ip"]: d for d in snap["devices"]}
+        self.assertIs(dev["10.0.1.3"].get("removable"), True)
+        self.assertNotIn("removable", dev["10.0.1.1"], "a collected switch is never removable")
+        cfg = config.validate({"collector": {"switch_username": "<USER>", "seeds": ["10.0.1.3"]},
+                               "subnets": [{"cidr": "10.0.0.0/16", "institute": "Campus"}]})
+        dev = {d["ip"]: d for d in build.build(cfg, campus(), WLC)[0]["devices"]}
+        self.assertNotIn("removable", dev["10.0.1.3"], "a core seed is never removable")
 
 
 class DownSwitches(unittest.TestCase):
@@ -317,6 +329,20 @@ class DownSwitches(unittest.TestCase):
         self.assertEqual(dev["10.0.1.50"]["status"], "no-ssh")
         self.assertEqual(dev["10.0.1.2"]["status"], "ok", "a collected record is never Down")
         self.assertEqual(dev["10.0.1.3"]["status"], "failed")
+        self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0))
+
+    def test_known_switch_out_of_scope_or_excluded_is_not_listed(self):
+        """MINOR 3: a known switch whose subnet was removed from config.toml or excluded is not listed."""
+        self.known["10.9.0.1"] = dict(self.known["10.0.1.1"], ip="10.9.0.1", hostname="old-sw")
+        cfg = config.validate({"collector": {"switch_username": "<USER>", "exclude": ["10.0.1.2/32"]},
+                               "subnets": [{"cidr": "10.0.0.0/24", "institute": "DC"},
+                                           {"cidr": "10.0.1.0/24", "institute": "Engineering"}]})
+        reach = {ip: {"up": False, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": 2}
+                 for ip in ("10.0.1.2", "10.9.0.1")}
+        snap, _, _ = build.build(cfg, self.recs, WLC, now="2026-11-05T11:00:00Z", known=self.known, reach=reach)
+        ips = [d["ip"] for d in snap["devices"]]
+        self.assertNotIn("10.9.0.1", ips, "out of scope")
+        self.assertNotIn("10.0.1.2", ips, "excluded")
         self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0))
 
 

@@ -70,12 +70,14 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     """Return (snapshot, links_baseline, counters).
 
     web_only: Cisco hosts the campus IP scan found with a web UI but no SSH ({ip, ports, hint});
-    listed as they are (never logged in to), each with its institute.
+    listed as they are (never logged in to), each with its institute. None: no scan produced a list
+    yet (snapshot webOnly is null and the page hides the section).
 
-    known: switches read before (known.load); reach: up/down results (known.apply_probe), after this
-    run's tcp/22 probe or, for a rebuild, as they are now. A known switch with no record and no
-    no-ssh row is listed with its last-known inventory: "down" if it missed 2 or more checks in a
-    row, otherwise "unreachable".
+    known: switches read before (known.load); reach: up/down results (known.apply_probe) as they are
+    when the snapshot is built. A known switch with no record and no no-ssh row is listed with its
+    last-known inventory: "down" if it missed 2 or more checks in a row, otherwise "unreachable".
+    Known switches now out of scope or excluded are not listed. SSH-failed rows of non-seed
+    switches get removable: true (R10).
     """
     col = cfg["collector"]
     now = now or iso_now()
@@ -216,6 +218,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     thr_err, thr_cpu, thr_poe = col["error_delta_threshold"], col["cpu_threshold"], col["poe_threshold"]
     # Which read-only account logged in: set name + username from config (never the password).
     user_of = {s["name"]: s["username"] for s in col.get("switch_credential_sets") or []}
+    seeds = set(col.get("seeds") or ())
     for r in records:
         ip = r["ip"]
         d = {"ip": ip, "hostname": r.get("hostname") or "", "institute": institute(ip), "platform": r.get("platform", ""),
@@ -230,6 +233,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
             d.update(refreshedAt=r["refreshedAt"], refreshedBy=r.get("refreshedBy", ""))
         if not r["ok"]:
             d["flags"].append("ssh-failed")
+            if ip not in seeds:  # R10: the team may Remove it, so the switch passwords stop going there
+                d["removable"] = True
             finding("warning", "ssh-failed", f"SSH collection failed: {r.get('error')}", ip)
             if ip in prev_counters:
                 new_counters[ip] = prev_counters[ip]
@@ -298,7 +303,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     reach = reach or {}
     n_down = n_unreach = 0
     for ip, k in sorted((known or {}).items()):
-        if ip in by_ip or ip in no_ssh:
+        # Out of scope or excluded now: not listed (and not probed); the team can still Remove it.
+        if ip in by_ip or ip in no_ssh or not config_mod.in_scope(cfg, ip):
             continue
         r = reach.get(ip) or {}
         misses = int(r.get("misses") or 0)
@@ -385,7 +391,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
         "devices": sorted(devices, key=lambda d: (d["institute"], d["depth"] if d["depth"] is not None else 99, d["hostname"] or d["ip"])),
         "links": sorted(links.values(), key=lambda l: (l["aName"], l["aPort"])),
         "problemPorts": problem_ports, "aps": aps, "findings": findings,
-        "webOnly": [dict(w, institute=institute(w["ip"])) for w in web_only or []],
+        # None (not []) when no campus scan produced a list yet, so the page does not claim "none found".
+        "webOnly": None if web_only is None else [dict(w, institute=institute(w["ip"])) for w in web_only],
     }
     return snapshot, baseline, new_counters
 

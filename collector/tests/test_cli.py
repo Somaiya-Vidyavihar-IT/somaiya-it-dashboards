@@ -1,3 +1,4 @@
+import io
 import os
 import ssl
 import tempfile
@@ -134,6 +135,13 @@ class Cli(unittest.TestCase):
             forget.assert_called_once_with(self.cfg, "10.0.0.2", "net@somaiya.edu", locked=True)
             cli.main(["forget", "--ip", "10.0.0.2"])
             forget.assert_called_with(self.cfg, "10.0.0.2", "", locked=False)
+
+    def test_forget_help_names_down_and_ssh_failed(self):
+        """R10: the CLI's forget is the same Remove as the dashboard: Down or SSH failed rows."""
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), self.assertRaises(SystemExit):
+            cli.main(["--help"])
+        self.assertIn("remove a Down or SSH-failed switch", " ".join(out.getvalue().split()))
 
 
 if __name__ == "__main__":

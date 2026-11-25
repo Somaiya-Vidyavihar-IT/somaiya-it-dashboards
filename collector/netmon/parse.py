@@ -7,10 +7,12 @@ import re
 
 IFACE_PREFIXES = [
     ("hundredgigabitethernet", "Hu"), ("hundredgige", "Hu"), ("fortygigabitethernet", "Fo"),
-    ("twentyfivegige", "Twe"), ("tengigabitethernet", "Te"), ("gigabitethernet", "Gi"),
+    ("twentyfivegige", "Twe"), ("tengigabitethernet", "Te"), ("fivegigabitethernet", "Fi"),
+    ("twogigabitethernet", "Tw"), ("gigabitethernet", "Gi"),
     ("fastethernet", "Fa"), ("ethernet", "Eth"), ("port-channel", "Po"), ("twe", "Twe"),
     ("eth", "Eth"), ("gi", "Gi"), ("ge", "Gi"), ("te", "Te"), ("xg", "Te"), ("xe", "Te"),
-    ("fa", "Fa"), ("fe", "Fa"), ("fo", "Fo"), ("hu", "Hu"), ("po", "Po"), ("mgmt", "mgmt"),
+    ("fa", "Fa"), ("fe", "Fa"), ("fo", "Fo"), ("hu", "Hu"), ("po", "Po"), ("tw", "Tw"), ("fi", "Fi"),
+    ("mgmt", "mgmt"),
 ]
 
 

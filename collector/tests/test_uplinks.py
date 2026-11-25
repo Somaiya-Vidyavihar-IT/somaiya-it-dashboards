@@ -309,6 +309,124 @@ class Poll(unittest.TestCase):
             self.assertEqual(cli.main(["uplinks"]), 2)
         poll.assert_called_once_with(self.cfg)
 
+    # ---- IMPORTANT 1: a long round is never lost ----
+    def _switches(self, n, role="core"):
+        devs = [dev(f"10.0.0.{i}", role, "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")])
+                for i in range(1, n + 1)]
+        self.snapshot(devs)
+        answer = lambda cmd: "" if cmd == "show etherchannel summary" else iface("Gi1/0/48", 100000000)
+        for d in devs:
+            self.conns[d["ip"]] = FakeConn(answer)
+        return devs
+
+    def test_round_over_budget_saves_what_is_done_and_stops(self):
+        """New switches are not started once the time budget is used up; what was read is written and
+        marked polled, and the rest is due first at the next round."""
+        self._switches(3)
+        self.cfg["collector"]["uplink_workers"] = 1
+        clock = {"t": 0.0}
+        connect = self.connect
+
+        def slow(platform, ip, *a):
+            clock["t"] += 400  # each switch takes 400 s; the budget is 420 s
+            return connect(platform, ip, *a)
+        with mock.patch("netmon.creds.switch_sets", return_value=self.sets), \
+                mock.patch("netmon.devices._connect", side_effect=slow):
+            code = uplinks.poll(self.cfg, now=T0, clock=lambda: clock["t"])
+        self.assertEqual(code, 0)
+        self.assertEqual([ip for _, ip, *_ in self.logins], ["10.0.0.1", "10.0.0.2"], "nothing started after 420 s")
+        data = self.store.read("uplinks.json")
+        self.assertEqual(sorted({r["ip"] for r in data["ports"]}), ["10.0.0.1", "10.0.0.2"])
+        self.assertEqual(sorted(self.store.read("state", "uplinks-polled.json")), ["10.0.0.1", "10.0.0.2"])
+        self.assertFalse(self.store.running("uplinks.lock"))
+        self.logins.clear()
+        clock["t"] = 0.0
+        with mock.patch("netmon.creds.switch_sets", return_value=self.sets), \
+                mock.patch("netmon.devices._connect", side_effect=self.connect):
+            uplinks.poll(self.cfg, now=T0 + timedelta(minutes=10), clock=lambda: clock["t"])
+        self.assertEqual(self.logins[0][1], "10.0.0.3", "the switch left over is read first next time")
+
+    def test_progress_is_written_during_the_round(self):
+        """A round killed at the 9-minute task limit keeps every switch already read."""
+        self._switches(3)
+        self.cfg["collector"]["uplink_workers"] = 1
+        seen = {}
+        connect = self.connect
+
+        def spy(platform, ip, *a):
+            seen[ip] = (sorted({r["ip"] for r in (self.store.read("uplinks.json") or {}).get("ports", [])}),
+                        sorted(self.store.read("state", "uplinks-polled.json") or {}))
+            return connect(platform, ip, *a)
+        with mock.patch.object(uplinks, "SAVE_EVERY", 1), mock.patch("netmon.creds.switch_sets", return_value=self.sets), \
+                mock.patch("netmon.devices._connect", side_effect=spy):
+            self.assertEqual(uplinks.poll(self.cfg, now=T0), 0)
+        self.assertEqual(seen["10.0.0.1"], ([], []))
+        self.assertEqual(seen["10.0.0.3"], (["10.0.0.1", "10.0.0.2"], ["10.0.0.1", "10.0.0.2"]))
+
+    def test_core_and_distribution_first_then_oldest_read(self):
+        devs = [dev("10.0.1.5", "access", "cisco_ios", [nb("Gi1/0/48", "cisco-dsw", "10.0.1.1", peer="10.0.1.1")]),
+                dev("10.0.0.1", "core", "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")]),
+                dev("10.0.1.6", "access", "cisco_ios", [nb("Gi1/0/48", "cisco-dsw", "10.0.1.1", peer="10.0.1.1")]),
+                dev("10.0.1.1", "distribution", "cisco_ios", [nb("Gi1/0/48", "core-01", "10.0.0.1", peer="10.0.0.1")])]
+        self.snapshot(devs)
+        self.store.write({"10.0.0.1": "2026-11-25T03:30:00Z", "10.0.1.1": "2026-11-25T03:20:00Z",
+                          "10.0.1.6": "2026-11-25T03:00:00Z"}, "state", "uplinks-polled.json")
+        self.cfg["collector"]["uplink_workers"] = 1
+        answer = lambda cmd: "" if cmd == "show etherchannel summary" else iface("Gi1/0/48", 1)
+        for d in devs:
+            self.conns[d["ip"]] = FakeConn(answer)
+        self.poll()
+        self.assertEqual([ip for _, ip, *_ in self.logins], ["10.0.1.1", "10.0.0.1", "10.0.1.5", "10.0.1.6"],
+                         "core/distribution (oldest first), then the others: never read, then oldest")
+
+    def test_stale_lock_boundary(self):
+        """A round is stopped at 9 minutes; its lock is stale after 570 s, so the next start (600 s) runs."""
+        self._switches(1)
+        self.assertTrue(self.store.acquire({"test": True}, "uplinks.lock"))
+        lock = self.store.path("state", "uplinks.lock")
+        young = time.time() - 560
+        os.utime(lock, (young, young))
+        self.assertEqual(self.poll()[0], 2, "560 s: may still be running")
+        old = time.time() - 580
+        os.utime(lock, (old, old))
+        self.assertEqual(self.poll()[0], 0, "580 s: left by a round the task limit stopped")
+
+    def test_switch_without_uplinks_any_more_drops_its_old_rows(self):
+        """MINOR 2: an ok switch that no longer has selected ports does not keep old rows (or alerts) forever."""
+        core = dev("10.0.0.1", "core", "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")])
+        self.snapshot([core])
+        self.conns["10.0.0.1"] = FakeConn(lambda cmd: "" if "etherchannel" in cmd else iface("Gi1/0/48", 900000000))
+        _, data = self.poll()
+        self.assertTrue(data["ports"][0]["alert"])
+        self.snapshot([dict(core, neighbors=[])])
+        _, data = self.poll(T0 + timedelta(minutes=10))
+        self.assertEqual(data["ports"], [])
+
+
+class StoreWrite(unittest.TestCase):
+    def test_write_retries_when_the_target_is_open_elsewhere(self):
+        """MINOR 6: on Windows os.replace fails (access denied) while another process reads the file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            real, calls = os.replace, []
+
+            def flaky(src, dst):
+                calls.append(dst)
+                if len(calls) <= 2:
+                    raise PermissionError(5, "Access is denied")
+                return real(src, dst)
+            with mock.patch("netmon.store.os.replace", side_effect=flaky), mock.patch("netmon.store.time.sleep") as sleep:
+                store.write({"a": 1}, "latest.json")
+            self.assertEqual(store.read("latest.json"), {"a": 1})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(sleep.call_count, 2)
+            with mock.patch("netmon.store.os.replace", side_effect=PermissionError(5, "Access is denied")), \
+                    mock.patch("netmon.store.time.sleep"):
+                with self.assertRaises(PermissionError):
+                    store.write({"a": 2}, "latest.json")
+            self.assertEqual(store.read("latest.json"), {"a": 1})
+            self.assertEqual([n for n in os.listdir(tmp) if n.endswith(".tmp")], [], "no temporary file left behind")
+
 
 if __name__ == "__main__":
     unittest.main()

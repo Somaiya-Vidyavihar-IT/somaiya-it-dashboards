@@ -50,9 +50,9 @@ def validate(raw):
     col.setdefault("error_delta_threshold", 100)
     col.setdefault("cpu_threshold", 80)
     col.setdefault("poe_threshold", 75)
-    col.setdefault("uplink_threshold", 75)      # percent of link speed, busiest direction
-    col.setdefault("uplink_fast_minutes", 10)
-    col.setdefault("uplink_slow_minutes", 30)
+    col.setdefault("uplink_threshold", 75)      # percent of link speed, outgoing rate only
+    col.setdefault("uplink_fast_minutes", 10)   # core and distribution switches
+    col.setdefault("uplink_slow_minutes", 30)   # every other switch
     col.setdefault("uplink_workers", 16)
     col.setdefault("scan_ports", [22, 443, 80])
     col.setdefault("cisco_ssh_banners", ["(?i)cisco"])
