@@ -49,6 +49,17 @@ def forget(known, ip):
     return known.pop(ip, None) is not None
 
 
+def is_down(status, reach_entry):
+    """Down as the dashboard shows it now, for a snapshot row of a switch not read on the last run
+    (status "down" or "unreachable"): the live up/down check decides (2+ misses); with no live
+    result the snapshot's own status stands. Collected rows are never removable."""
+    if status not in ("down", "unreachable"):
+        return False
+    if reach_entry is None:
+        return status == "down"
+    return not reach_entry.get("up") and int(reach_entry.get("misses") or 0) >= 2
+
+
 def apply_probe(prev_results, probe_results, now):
     """Up/down results for the probed addresses: {ip: {up, since, latencyMs, misses}}.
 

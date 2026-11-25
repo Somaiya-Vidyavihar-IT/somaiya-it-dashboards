@@ -59,6 +59,17 @@ class KnownSwitches(unittest.TestCase):
         self.assertEqual((r["10.0.0.1"]["misses"], r["10.0.0.1"]["since"]), (1, "T0"))
         self.assertEqual((r["10.0.0.2"]["misses"], r["10.0.0.2"]["since"]), (1, "T1"))
 
+    def test_is_down_follows_the_latest_check(self):
+        m = lambda n: {"up": n == 0, "since": "T", "latencyMs": None, "misses": n}
+        self.assertTrue(known.is_down("down", None), "no live result: the snapshot status stands")
+        self.assertFalse(known.is_down("unreachable", None))
+        self.assertTrue(known.is_down("unreachable", m(2)))
+        self.assertFalse(known.is_down("unreachable", m(1)))
+        self.assertFalse(known.is_down("down", m(0)), "answering again")
+        self.assertFalse(known.is_down("down", {"up": False, "since": "T"}), "old file without misses")
+        for status in ("ok", "failed", "no-ssh", None):
+            self.assertFalse(known.is_down(status, m(5)), status)
+
     def test_load_save_and_forget(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(tmp)

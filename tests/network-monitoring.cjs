@@ -175,7 +175,26 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const l=harness(API,(p,m)=>p==='/api/v1/reachability'?{status:200,body:reach2}:p==='/api/v1/status'?{status:200,body:{...st,reachabilityAt:reach2.checkedAt}}:routes(4)(p,m));await l.connect();
   vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",l.ctx);assert.ok(l.el('sw-count').textContent.startsWith('2 of 5'),l.el('sw-count').textContent);assert.ok(l.el('sw-rows').innerHTML.includes('core-01'),'A live row with 2 misses shows Down');
   vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",l.ctx);assert.ok(l.el('sw-count').textContent.startsWith('1 of 5'),'One miss is still Unreachable');
-  vm.runInContext("openDevice('10.0.0.1')",l.ctx);assert.ok(l.el('detail-body').innerHTML.includes('<b>Down since</b><span>05 Nov 2026, 08:15 IST</span>'));assert.equal(l.el('remove-switch').hidden,true,'Remove only for Down rows from the snapshot');}
+  vm.runInContext("openDevice('10.0.0.1')",l.ctx);assert.ok(l.el('detail-body').innerHTML.includes('<b>Down since</b><span>05 Nov 2026, 08:15 IST</span>'));assert.equal(l.el('remove-switch').hidden,true,'A switch read on the last run cannot be removed');
+  // R5: a known switch that missed only this run's check is listed as Not answering; Down once the live check counts 2 misses.
+  // R6: a Down or Not answering row whose live check answers again says so instead of Down.
+  const naDev={...downDev,ip:'10.0.1.8',hostname:'asw-08',status:'unreachable',flags:['unreachable'],error:'Did not answer SSH (tcp/22) from the collector on this run',downSince:'2026-11-05T02:20:00Z'};
+  current={...withDown,summary:{...withDown.summary,switches:6,unreachable:1},devices:[...withDown.devices,naDev]};
+  const live=extra=>{const rc={checkedAt:'2026-11-05T03:30:00Z',results:{...reach.results,...extra}};return harness(API,(p,m)=>p==='/api/v1/reachability'?{status:200,body:rc}:p==='/api/v1/status'?{status:200,body:{...st,reachabilityAt:rc.checkedAt}}:routes(4)(p,m))};
+  const rowOf=(h,name)=>h.el('sw-rows').innerHTML.split('<tr>').find(r=>r.includes('>'+name+'<'))||'';
+  const na=live({});await na.connect();
+  assert.ok(na.el('sw-rows').innerHTML.includes('<span class="badge bad">Not answering</span>'),'An unreachable row shows Not answering');
+  assert.ok(na.el('stats').innerHTML.includes('1 not answering'));
+  vm.runInContext("document.getElementById('sw-state').value='not-answering';renderSwitches()",na.ctx);assert.ok(na.el('sw-count').textContent.startsWith('1 of 6'),'Filter Not answering');
+  vm.runInContext("openDevice('10.0.1.8')",na.ctx);{const b=na.el('detail-body').innerHTML;assert.ok(b.includes('<b>Not answering since</b>')&&b.includes('Last-known uplinks'),'Last-known details of a Not answering switch');}
+  assert.equal(na.el('remove-switch').hidden,true,'Not answering is not Down: no Remove');
+  const nd=live({'10.0.1.8':{up:false,since:'2026-11-05T02:20:00Z',latencyMs:null,misses:2}});await nd.connect();
+  assert.ok(rowOf(nd,'asw-08').includes('<span class="badge bad">Down</span>'),'2 live misses turn it Down');
+  vm.runInContext("openDevice('10.0.1.8')",nd.ctx);assert.equal(nd.el('remove-switch').hidden,false,'Down on the page: Remove offered');
+  const back=live({'10.0.1.7':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0},'10.0.1.8':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0}});await back.connect();
+  {assert.ok(rowOf(back,'asw-07').includes('Answering again (read at the next full run)')&&rowOf(back,'asw-08').includes('Answering again (read at the next full run)'),'Answering again instead of Down');}
+  vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",back.ctx);assert.ok(back.el('sw-count').textContent.startsWith('0 of 6'));
+  vm.runInContext("openDevice('10.0.1.7')",back.ctx);assert.equal(back.el('remove-switch').hidden,true,'No Remove while it answers again');assert.ok(!back.el('detail-body').innerHTML.includes('Down since'));}
  // Topology diagram: the API's DOT file is laid out by Viz.js (stubbed here) and active SVG content is removed.
  {const removed=[],script={remove(){removed.push('script')}},title={textContent:'10.0.0.1'};
   const node={attributes:[{name:'xlink:href'},{name:'class'}],dataset:{},removeAttribute(n){removed.push(n)},querySelector:s=>s==='title'?title:null};

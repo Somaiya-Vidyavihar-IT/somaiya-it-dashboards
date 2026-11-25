@@ -69,9 +69,10 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
           ssh_closed=frozenset(), now=None, known=None, reach=None):
     """Return (snapshot, links_baseline, counters).
 
-    known: switches read before (known.load); reach: up/down results after this run's tcp/22 probe
-    (known.apply_probe). A known switch with no record and no no-ssh row that missed 2 or more
-    checks in a row is listed as "down" with its last-known inventory.
+    known: switches read before (known.load); reach: up/down results (known.apply_probe), after this
+    run's tcp/22 probe or, for a rebuild, as they are now. A known switch with no record and no
+    no-ssh row is listed with its last-known inventory: "down" if it missed 2 or more checks in a
+    row, otherwise "unreachable".
     """
     col = cfg["collector"]
     now = now or iso_now()
@@ -289,26 +290,40 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                 "the collector, so it and the switches behind it are not read. Allow SSH from the collector "
                 "(VTY access list or firewall), then use Reconnect.", ip, name)
 
+    # Known switches not read now (R5): always listed with their last-known details. "down" after 2+
+    # missed up/down checks in a row, otherwise "unreachable" (Not answering) until the next check.
     reach = reach or {}
-    n_down = 0
+    n_down = n_unreach = 0
     for ip, k in sorted((known or {}).items()):
-        r = reach.get(ip) or {}
-        if ip in by_ip or ip in no_ssh or int(r.get("misses") or 0) < 2:
+        if ip in by_ip or ip in no_ssh:
             continue
-        n_down += 1
+        r = reach.get(ip) or {}
+        misses = int(r.get("misses") or 0)
+        down = misses >= 2
+        n_down += down
+        n_unreach += not down
         name = k.get("hostname") or ""
         devices.append({"ip": ip, "hostname": name, "institute": institute(ip), "platform": k.get("platform", ""),
                         "model": k.get("model", ""), "serial": k.get("serial", ""), "version": k.get("version", ""),
-                        "uptime": "", "role": k.get("role") or "unknown", "depth": None, "status": "down",
-                        "error": "Stopped answering the up/down check (tcp/22) from the collector", "warnings": [],
-                        "cpu": None, "poe": None, "ports": None, "errDelta": None, "flags": ["down"], "neighbors": [],
+                        "uptime": "", "role": k.get("role") or "unknown", "depth": None,
+                        "status": "down" if down else "unreachable",
+                        "error": "Stopped answering the up/down check (tcp/22) from the collector" if down
+                        else "Did not answer SSH (tcp/22) from the collector on this run",
+                        "warnings": [], "cpu": None, "poe": None, "ports": None, "errDelta": None,
+                        "flags": ["down" if down else "unreachable"], "neighbors": [],
                         "commands": [], "neighborIssues": [], "credentialSet": "", "loginUser": "",
                         "lastUplinks": list(k.get("uplinks") or []), "downSince": r.get("since"),
                         "lastSeenOk": k.get("lastSeenOk")})
         last = ", ".join(f"{u['name'] or u['ip']} {u['remotePort']}".strip() for u in k.get("uplinks") or [])
-        finding("critical", "down", f"Switch {name or ip} ({ip}) has missed {r['misses']} up/down checks (tcp/22) in a "
-                f"row since {r.get('since')}{f'; last seen on {last}' if last else ''}. Check its power and uplink. "
-                "If it was taken out of service, Remove it from its details.", ip, name)
+        seen = f"; last seen on {last}" if last else ""
+        if down:
+            finding("critical", "down", f"Switch {name or ip} ({ip}) has missed {misses} up/down checks (tcp/22) in a "
+                    f"row since {r.get('since')}{seen}. Check its power and uplink. "
+                    "If it was taken out of service, Remove it from its details.", ip, name)
+        else:
+            finding("warning", "unreachable", f"Switch {name or ip} ({ip}) did not answer SSH (tcp/22) on this run{seen}. "
+                    "It is shown with its last-known details and becomes Down after 2 missed up/down checks in a row.",
+                    ip, name)
 
     host_of = {d["ip"]: d["hostname"] for d in devices}
     dev_by_ip = {d["ip"]: d for d in devices}
@@ -341,7 +356,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
 
     summary = {
         "switches": len(devices), "collected": len(ok), "failed": sum(d["status"] == "failed" for d in devices),
-        "noSsh": len(no_ssh), "down": n_down,
+        "noSsh": len(no_ssh), "down": n_down, "unreachable": n_unreach,
         "links": sum(l["status"] in ("up", "down") for l in links.values()),
         "linksLost": sum(l["status"] == "lost" for l in links.values()),
         "uplinksDown": sum(l["uplink"] and l["status"] in ("down", "lost") for l in links.values()),

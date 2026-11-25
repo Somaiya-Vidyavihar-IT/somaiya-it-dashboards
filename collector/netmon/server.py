@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import known
 from .store import Store
 
 log = logging.getLogger("netmon.server")
@@ -297,7 +298,9 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.store
         if store.running():
             return self._error(409, "A full discovery run is in progress. Remove the switch when it finishes.")
-        if self.server.switch_status(ip) != "down":
+        # Down as the page shows it: not read on the last run and 2+ missed checks as of the latest check.
+        live = ((store.read("reachability.json", default={}) or {}).get("results") or {}).get(ip)
+        if not known.is_down(self.server.switch_status(ip), live):
             return self._error(404, "This address is not listed as Down on the dashboard; only a Down switch can be removed.")
         if not store.acquire({"ip": ip, "by": email, "action": "forget"}, "refresh.lock"):
             busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"

@@ -338,15 +338,45 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual(dev["status"], "ok")
         self.assertEqual(store.read("latest.json")["summary"]["down"], 0)
 
-    def test_one_missed_check_is_not_down(self):
+    def _status(self, store, ip):
+        return next((d["status"] for d in store.read("latest.json")["devices"] if d["ip"] == ip), None)
+
+    def test_one_missed_check_is_not_answering_then_down(self):
+        """R5: a switch that goes off just before a full run is listed at once (Not answering), Down after 2 misses."""
         store = self._full_run()
         self._full_run_asw_gone()
         self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 1)
-        self.assertNotIn("10.0.1.2", [d["ip"] for d in store.read("latest.json")["devices"]])
+        dev = next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual((dev["status"], dev["hostname"], dev["lastUplinks"][0]["name"]), ("unreachable", "asw-02", "dsw-01"))
+        self.assertEqual(store.read("latest.json")["summary"]["unreachable"], 1)
         self.assertIn("10.0.1.2", known.load(store), "still remembered")
-        self.assertIn("10.0.1.2", self._reach({"10.0.1.2": None}), "checked although missing from the snapshot")
+        self.assertIn("10.0.1.2", self._reach({"10.0.1.2": None}), "still checked every 15 minutes")
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 2)
         self._full_run_asw_gone()
-        self.assertEqual(next(d for d in store.read("latest.json")["devices"] if d["ip"] == "10.0.1.2")["status"], "down")
+        self.assertEqual(self._status(store, "10.0.1.2"), "down")
+
+    def test_rebuild_uses_current_reachability(self):
+        """R6: a refresh or Remove decides Down / Not answering from reachability.json as it is now."""
+        store = self._full_run()
+        self._full_run_asw_gone()
+        self.assertEqual(self._status(store, "10.0.1.2"), "unreachable")
+        self._reach({"10.0.1.2": None})  # second miss, between full runs
+        self.assertEqual(self._refresh("10.0.0.1", self.records["10.0.0.1"])[0], 0)
+        self.assertEqual(self._status(store, "10.0.1.2"), "down")
+        self._reach({})  # answers again
+        self.assertEqual(self._refresh("10.0.0.1", self.records["10.0.0.1"])[0], 0)
+        self.assertEqual(self._status(store, "10.0.1.2"), "unreachable", "not Down any more; read at the next full run")
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 1, "only a Down switch can be removed")
+        self.assertIn("10.0.1.2", known.load(store))
+
+    def test_forget_a_not_answering_switch_once_it_misses_twice(self):
+        store = self._full_run()
+        self._full_run_asw_gone()
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 1, "one miss: not Down yet")
+        self._reach({"10.0.1.2": None})
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 0, "Down on the page: removable")
+        self.assertIsNone(self._status(store, "10.0.1.2"))
+        self.assertNotIn("10.0.1.2", known.load(store))
 
     def test_reach_probes_known_switches_missing_from_latest(self):
         store = self._full_run()

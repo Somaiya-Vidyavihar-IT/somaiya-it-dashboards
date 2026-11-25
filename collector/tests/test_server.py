@@ -182,11 +182,18 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertEqual(post({"ip": "10.0.0.2; whoami"})[0].status, 400)
         self.assertEqual(post({"ip": None})[0].status, 400)
         self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.1", "status": "ok"},
-                                                   {"ip": "10.0.0.2", "status": "down"}]}, "latest.json")
+                                                   {"ip": "10.0.0.2", "status": "down"},
+                                                   {"ip": "10.0.0.3", "status": "unreachable"},
+                                                   {"ip": "10.0.0.4", "status": "down"}]}, "latest.json")
+        miss = lambda n: {"up": n == 0, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": n}
+        self.store.write({"checkedAt": "x", "results": {"10.0.0.1": miss(3), "10.0.0.3": miss(1), "10.0.0.4": miss(0)}},
+                         "reachability.json")
         resp, body = post({"ip": "10.0.0.1"})
-        self.assertEqual(resp.status, 404, "only Down switches")
+        self.assertEqual(resp.status, 404, "only Down switches (a collected switch is not removable)")
         self.assertIn("not listed as Down", json.loads(body)["error"])
         self.assertEqual(post({"ip": "10.0.0.9"})[0].status, 404)
+        self.assertEqual(post({"ip": "10.0.0.3"})[0].status, 404, "Not answering with 1 miss is not Down yet")
+        self.assertEqual(post({"ip": "10.0.0.4"})[0].status, 404, "Down in the snapshot but answering again now")
         self.assertTrue(self.store.acquire({"trigger": "test"}))
         self.assertEqual(post({"ip": "10.0.0.2"})[0].status, 409, "not during a full run")
         self.store.release()

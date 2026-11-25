@@ -274,13 +274,24 @@ class DownSwitches(unittest.TestCase):
         s = snap["summary"]
         self.assertEqual((s["down"], s["switches"], s["failed"]), (1, 4, 1))
 
-    def test_one_miss_is_not_down(self):
+    def test_one_miss_is_listed_not_answering(self):
+        """R5: one missed check lists it as Not answering with its last-known details, not Down."""
         snap, dev = self._build(1)
-        self.assertNotIn("10.0.1.2", dev)
-        self.assertEqual(snap["summary"]["down"], 0)
+        d = dev["10.0.1.2"]
+        self.assertEqual((d["status"], d["flags"], d["hostname"], d["model"], d["role"]),
+                         ("unreachable", ["unreachable"], "asw-02", "X", "access"))
+        self.assertEqual(d["downSince"], "2026-11-05T09:15:00Z")
+        self.assertEqual([u["name"] for u in d["lastUplinks"]], ["dsw-01", "unknown-sw"])
+        self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"], snap["summary"]["switches"]), (0, 1, 4))
         self.assertFalse([f for f in snap["findings"] if f["type"] == "down"])
-        self.assertEqual(build.build(CFG, self.recs, WLC, now="2026-11-05T11:00:00Z")[0]["summary"]["down"], 0,
-                         "no known list: nothing is down")
+        f = [f for f in snap["findings"] if f["type"] == "unreachable"]
+        self.assertEqual([(x["severity"], x["ip"]) for x in f], [("warning", "10.0.1.2")])
+        # No up/down result at all (never checked): still listed, Not answering.
+        snap, _, _ = build.build(CFG, self.recs, WLC, now="2026-11-05T11:00:00Z", known=self.known, reach={})
+        d = next(x for x in snap["devices"] if x["ip"] == "10.0.1.2")
+        self.assertEqual((d["status"], d["downSince"]), ("unreachable", None))
+        snap = build.build(CFG, self.recs, WLC, now="2026-11-05T11:00:00Z")[0]
+        self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0), "no known list: nothing extra")
 
     def test_no_ssh_rows_never_go_down(self):
         self.known["10.0.1.50"] = dict(self.known["10.0.1.1"], ip="10.0.1.50", hostname="unknown-sw")
@@ -293,7 +304,7 @@ class DownSwitches(unittest.TestCase):
         self.assertEqual(dev["10.0.1.50"]["status"], "no-ssh")
         self.assertEqual(dev["10.0.1.2"]["status"], "ok", "a collected record is never Down")
         self.assertEqual(dev["10.0.1.3"]["status"], "failed")
-        self.assertEqual(snap["summary"]["down"], 0)
+        self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0))
 
 
 class Reports(unittest.TestCase):
