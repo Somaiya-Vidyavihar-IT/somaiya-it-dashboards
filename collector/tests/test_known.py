@@ -62,8 +62,9 @@ class KnownSwitches(unittest.TestCase):
     def test_is_down_follows_the_latest_check(self):
         m = lambda n: {"up": n == 0, "since": "T", "latencyMs": None, "misses": n}
         self.assertTrue(known.is_down("down", None), "no live result: the snapshot status stands")
+        self.assertTrue(known.is_down("down", m(3)))
         self.assertFalse(known.is_down("unreachable", None))
-        self.assertTrue(known.is_down("unreachable", m(2)))
+        self.assertFalse(known.is_down("unreachable", m(2)), "R7: Not answering in the snapshot is never removable")
         self.assertFalse(known.is_down("unreachable", m(1)))
         self.assertFalse(known.is_down("down", m(0)), "answering again")
         self.assertFalse(known.is_down("down", {"up": False, "since": "T"}), "old file without misses")

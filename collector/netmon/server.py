@@ -298,7 +298,7 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.store
         if store.running():
             return self._error(409, "A full discovery run is in progress. Remove the switch when it finishes.")
-        # Down as the page shows it: not read on the last run and 2+ missed checks as of the latest check.
+        # R7: only a row the snapshot lists as Down that the latest up/down check has not seen answer since.
         live = ((store.read("reachability.json", default={}) or {}).get("results") or {}).get(ip)
         if not known.is_down(self.server.switch_status(ip), live):
             return self._error(404, "This address is not listed as Down on the dashboard; only a Down switch can be removed.")

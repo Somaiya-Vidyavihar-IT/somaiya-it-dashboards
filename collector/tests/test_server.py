@@ -184,10 +184,15 @@ class ApiEndToEnd(unittest.TestCase):
         self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.1", "status": "ok"},
                                                    {"ip": "10.0.0.2", "status": "down"},
                                                    {"ip": "10.0.0.3", "status": "unreachable"},
-                                                   {"ip": "10.0.0.4", "status": "down"}]}, "latest.json")
+                                                   {"ip": "10.0.0.4", "status": "down"},
+                                                   {"ip": "10.0.0.5", "status": "unreachable"}]}, "latest.json")
         miss = lambda n: {"up": n == 0, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": n}
-        self.store.write({"checkedAt": "x", "results": {"10.0.0.1": miss(3), "10.0.0.3": miss(1), "10.0.0.4": miss(0)}},
-                         "reachability.json")
+        self.store.write({"checkedAt": "x", "results": {"10.0.0.1": miss(3), "10.0.0.3": miss(1), "10.0.0.4": miss(0),
+                                                        "10.0.0.5": miss(2)}}, "reachability.json")
+        with mock.patch.object(self.httpd, "_spawn"):
+            self.assertEqual(post({"ip": "10.0.0.5"})[0].status, 404,
+                             "R7: Not answering in the snapshot is not removable, even with 2 live misses")
+        self.store.release("refresh.lock")
         resp, body = post({"ip": "10.0.0.1"})
         self.assertEqual(resp.status, 404, "only Down switches (a collected switch is not removable)")
         self.assertIn("not listed as Down", json.loads(body)["error"])

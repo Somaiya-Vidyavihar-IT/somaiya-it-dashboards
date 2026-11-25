@@ -190,7 +190,9 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   assert.equal(na.el('remove-switch').hidden,true,'Not answering is not Down: no Remove');
   const nd=live({'10.0.1.8':{up:false,since:'2026-11-05T02:20:00Z',latencyMs:null,misses:2}});await nd.connect();
   assert.ok(rowOf(nd,'asw-08').includes('<span class="badge bad">Down</span>'),'2 live misses turn it Down');
-  vm.runInContext("openDevice('10.0.1.8')",nd.ctx);assert.equal(nd.el('remove-switch').hidden,false,'Down on the page: Remove offered');
+  vm.runInContext("openDevice('10.0.1.8')",nd.ctx);assert.equal(nd.el('remove-switch').hidden,true,'R7: no Remove until the snapshot lists it as Down');
+  nd.ctx.window.confirm=()=>true;await vm.runInContext('removeSwitch()',nd.ctx);assert.ok(!nd.calls.some(c=>c.url===API+'/api/v1/forget'),'removeSwitch does nothing for it either');
+  vm.runInContext("openDevice('10.0.1.7')",nd.ctx);assert.equal(nd.el('remove-switch').hidden,false,'A Down row from the snapshot still offers Remove');
   const back=live({'10.0.1.7':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0},'10.0.1.8':{up:true,since:'2026-11-05T03:30:00Z',latencyMs:2,misses:0}});await back.connect();
   {assert.ok(rowOf(back,'asw-07').includes('Answering again (read at the next full run)')&&rowOf(back,'asw-08').includes('Answering again (read at the next full run)'),'Answering again instead of Down');}
   vm.runInContext("document.getElementById('sw-state').value='down';renderSwitches()",back.ctx);assert.ok(back.el('sw-count').textContent.startsWith('0 of 6'));

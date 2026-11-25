@@ -50,13 +50,13 @@ def forget(known, ip):
 
 
 def is_down(status, reach_entry):
-    """Down as the dashboard shows it now, for a snapshot row of a switch not read on the last run
-    (status "down" or "unreachable"): the live up/down check decides (2+ misses); with no live
-    result the snapshot's own status stands. Collected rows are never removable."""
-    if status not in ("down", "unreachable"):
+    """Removable (dashboard Remove): the snapshot row is "down" (R7) and the latest up/down check has
+    not seen it answer since (R8: not up, 2+ misses; no live result: the snapshot status stands).
+    "unreachable" (Not answering) and collected rows are never removable."""
+    if status != "down":
         return False
     if reach_entry is None:
-        return status == "down"
+        return True
     return not reach_entry.get("up") and int(reach_entry.get("misses") or 0) >= 2
 
 

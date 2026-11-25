@@ -6,7 +6,7 @@ from unittest import mock
 
 from netmon import config, known, run
 from netmon.store import Store
-from tests.test_build import WLC, campus
+from tests.test_build import WLC, campus, nbr
 
 
 class FullRunOrchestration(unittest.TestCase):
@@ -303,11 +303,11 @@ class FullRunOrchestration(unittest.TestCase):
             self.assertEqual(run.reach_run(self.cfg), 0)
         return probed
 
-    def _full_run_asw_gone(self):
+    def _full_run_asw_gone(self, extra_neighbors=()):
         """A full run while asw-02 (10.0.1.2) is switched off: no tcp/22 and dsw-01 no longer sees it."""
         saved = self.records
         dsw = copy.deepcopy(saved["10.0.1.1"])
-        dsw["neighbors"] = [n for n in dsw["neighbors"] if n["name"] != "asw-02"]
+        dsw["neighbors"] = [n for n in dsw["neighbors"] if n["name"] != "asw-02"] + list(extra_neighbors)
         self.records = {ip: r for ip, r in dict(saved, **{"10.0.1.1": dsw}).items() if ip != "10.0.1.2"}
         try:
             return self._full_run()
@@ -369,12 +369,35 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 1, "only a Down switch can be removed")
         self.assertIn("10.0.1.2", known.load(store))
 
-    def test_forget_a_not_answering_switch_once_it_misses_twice(self):
+    def test_down_survives_a_neighbour_crawl_in_the_same_run(self):
+        """Review fix: the crawl's own tcp/22 probe of a new neighbour must not replace the run's up/down results."""
+        store = self._full_run()
+        self._reach({"10.0.1.2": None})
+        closed_nb = nbr("Gi1/0/20", "asw-60", "10.0.1.60", "Gi0/1")  # a switch neighbour that does not answer tcp/22
+        self._full_run_asw_gone(extra_neighbors=[closed_nb])
+        self.assertEqual(store.read("reachability.json")["results"]["10.0.1.2"]["misses"], 2)
+        latest = store.read("latest.json")
+        dev = next(d for d in latest["devices"] if d["ip"] == "10.0.1.2")
+        self.assertEqual(self._status(store, "10.0.1.60"), "no-ssh", "the crawl did probe the new neighbour")
+        self.assertEqual(dev["status"], "down")
+        self.assertEqual(dev["downSince"], store.read("reachability.json")["results"]["10.0.1.2"]["since"])
+        self.assertIsNotNone(dev["downSince"])
+        self.assertEqual([(f["severity"], f["ip"]) for f in latest["findings"] if f["type"] == "down"],
+                         [("critical", "10.0.1.2")])
+        self.assertEqual(latest["summary"]["down"], 1)
+
+    def test_forget_refuses_a_not_answering_switch(self):
+        """R7: only a row the last snapshot lists as Down can be removed, even after 2 live misses."""
         store = self._full_run()
         self._full_run_asw_gone()
         self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 1, "one miss: not Down yet")
         self._reach({"10.0.1.2": None})
-        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 0, "Down on the page: removable")
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 1,
+                         "Not answering in the snapshot: refused although the live check counts 2 misses")
+        self.assertEqual(self._status(store, "10.0.1.2"), "unreachable")
+        self.assertIn("10.0.1.2", known.load(store))
+        self._full_run_asw_gone()  # the next full run lists it as Down
+        self.assertEqual(run.forget_switch(self.cfg, "10.0.1.2", "net@somaiya.edu"), 0)
         self.assertIsNone(self._status(store, "10.0.1.2"))
         self.assertNotIn("10.0.1.2", known.load(store))
 

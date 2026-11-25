@@ -179,9 +179,10 @@ def _discover(cfg, store, trigger, by, started):
                         progress.mark(ip, hostname=n.get("name", "")[:80],
                                       source=f"neighbour of {rec.get('hostname') or rec['ip']} {n.get('localPort', '')}".strip())
                 if new:
-                    reach = scan.probe(new, 22, col["connect_timeout"], 64)
+                    # Not `reach`: that name holds this run's up/down results, which build() needs.
+                    nb_probe = scan.probe(new, 22, col["connect_timeout"], 64)
                     for ip in new:
-                        if reach.get(ip) is None:
+                        if nb_probe.get(ip) is None:
                             closed.add(ip)
                             progress.mark(ip, state="no-ssh", error="No answer on SSH (tcp/22)")
                         else:
@@ -404,8 +405,8 @@ def refresh_switch(cfg, ip, by="", locked=False):
 def forget_switch(cfg, ip, by="", locked=False):
     """Remove a Down switch from the dashboard (Remove): forget it and rebuild the snapshot without it.
 
-    Only a switch the dashboard shows as Down can be removed (known.is_down: a snapshot row not read on
-    the last run, with 2+ missed up/down checks as of the latest check). No login and no probe; the
+    Only a switch the snapshot lists as Down can be removed (known.is_down, R7: status "down" and the
+    latest up/down check has not seen it answer since). No login and no probe; the
     snapshot is rebuilt from state/last-run.json like refresh_switch. If the switch answers tcp/22
     again later, a full run finds it like any other switch (subnet sweep, seed or CDP/LLDP neighbour).
     Shares refresh.lock with refresh_switch.
