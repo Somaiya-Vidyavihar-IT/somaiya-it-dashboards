@@ -110,6 +110,28 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const before=l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length;await vm.runInContext('loadAll()',l.ctx);
   assert.equal(l.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length,before+1,'Progress is re-read on every poll while a run is going');
   await vm.runInContext('loadAll()',g.ctx);assert.equal(g.calls.filter(c=>c.url.endsWith('/api/v1/progress')).length,1,'and not polled when idle');}
+ // Campus IP scan: counts and the "Cisco web UI only (no SSH)" list on Discovery; hidden for older snapshots.
+ {const old=harness(API,team);await old.connect();assert.equal(old.el('scan-panel').hidden,true,'No scan section for a snapshot without scan counts');
+  const scanned={...snapshot,scan:{subnets:3,addresses:1530,sshOpen:40,webOpen:25,ciscoSsh:4,ciscoWebOnly:1,nonCiscoSkipped:22,collected:38},webOnly:[{ip:'10.0.2.9',institute:'Engineering',ports:[443,80],hint:'Cisco <script>x</script> | cisco-IOS'}]};
+  const s=harness(API,(p,m)=>p==='/api/v1/snapshot'?{status:200,body:scanned}:team(p,m));await s.connect();
+  assert.equal(s.el('scan-panel').hidden,false);assert.equal(s.el('web-only-panel').hidden,false);
+  const t=s.el('scan-counts').textContent;for(const x of ['1,530 addresses','40 answer SSH','25 ','4 new Cisco','1 Cisco web UI only','22 non-Cisco hosts skipped'])assert.ok(t.includes(x),x+' in '+t);
+  const w=s.el('web-only-rows').innerHTML;assert.ok(w.includes('10.0.2.9')&&w.includes('Engineering')&&w.includes('443, 80'),'Web-only row: IP, institute, ports');
+  assert.ok(w.includes('Cisco &lt;script&gt;x&lt;/script&gt; | cisco-IOS')&&!w.includes('<script>'),'Page title / server is escaped');
+  const none=harness(API,(p,m)=>p==='/api/v1/snapshot'?{status:200,body:{...scanned,webOnly:[]}}:team(p,m));await none.connect();
+  assert.equal(none.el('web-only-panel').hidden,false);assert.ok(none.el('web-only-rows').innerHTML.includes('No Cisco web UI without SSH'),'Empty list says so');
+  const noList=harness(API,(p,m)=>p==='/api/v1/snapshot'?{status:200,body:{...scanned,webOnly:undefined}}:team(p,m));await noList.connect();
+  assert.equal(noList.el('scan-panel').hidden,false);assert.equal(noList.el('web-only-panel').hidden,true,'No list without the field');
+  // While the scan runs: one phase line with counts, not one row per address.
+  const startedAt='2026-11-05T03:00:00Z',running=phase=>({status:200,body:{run:{state:'running',phase,startedAt,lastSuccessAt:snapshot.generatedAt},running:true,reachabilityAt:reach.checkedAt}});
+  const sw=harness(API,(p,m)=>p==='/api/v1/status'?running('sweep'):p==='/api/v1/progress'?{status:200,body:{startedAt,finishedAt:null,phase:'sweep',sweepDone:4096,sweepTotal:12000,items:[]}}:team(p,m));await sw.connect();
+  assert.ok(sw.el('progress-summary').textContent.includes('4,096 of 12,000'),sw.el('progress-summary').textContent);assert.ok(sw.el('run-note').textContent.includes('4,096 of 12,000'),sw.el('run-note').textContent);
+  assert.ok(sw.el('progress-rows').innerHTML.includes('once the scan finishes'));
+  const done=harness(API,(p,m)=>p==='/api/v1/status'?running('sweep'):p==='/api/v1/progress'?{status:200,body:{startedAt,finishedAt:null,phase:'sweep',sweepDone:12000,sweepTotal:12000,items:[]}}:team(p,m));await done.connect();
+  assert.ok(done.el('progress-summary').textContent.includes('checking which hosts are Cisco'));
+  const ssh=harness(API,(p,m)=>p==='/api/v1/status'?running('ssh'):p==='/api/v1/progress'?{status:200,body:{startedAt,finishedAt:null,phase:'ssh',sweepDone:12000,sweepTotal:12000,scan:scanned.scan,items:[{ip:'10.0.2.1',kind:'switch',hostname:'',state:'waiting',source:'IP scan (Cisco)',at:startedAt}]}}:team(p,m));await ssh.connect();
+  assert.ok(ssh.el('progress-summary').textContent.includes('Scan: 4 new Cisco with SSH · 1 Cisco web UI only · 22 non-Cisco skipped'),ssh.el('progress-summary').textContent);
+  assert.ok(ssh.el('progress-rows').innerHTML.includes('IP scan (Cisco)'));}
  // A neighbour switch that does not answer SSH from the collector gets its own row.
  {const n=harness(API,team);await n.connect();
   assert.ok(n.el('sw-rows').innerHTML.includes('HOSTEL_DIST_SW')&&n.el('sw-rows').innerHTML.includes('No SSH from collector'),'No-SSH switches are listed');
@@ -233,5 +255,5 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
- console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, single-switch refresh, Down switches and Remove, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
+ console.log('Passed Network Monitoring fixtures: team access, escaping, reachability, filters, details, commands run, Run now, run progress, campus scan and Cisco web UI list, single-switch refresh, Down switches and Remove, DOT diagram, denial, off-campus, expiry, unconfigured API, scopes, disconnect.');
 })().catch(e=>{console.error(e);process.exitCode=1});

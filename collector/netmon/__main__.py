@@ -10,6 +10,7 @@
   python -m netmon [--config PATH] set-password switch --set NAME | wlc | solarwinds | smtp
   python -m netmon [--config PATH] cctv-mail-test --to ADDRESS
   python -m netmon [--config PATH] check-config
+  python -m netmon [--config PATH] fingerprint
   python -m netmon [--config PATH] make-cert --host netmon.somaiya.edu [--ip VM_IP]
   python -m netmon [--config PATH] import-pfx wildcard.pfx
 """
@@ -53,6 +54,8 @@ def main(argv=None):
     p.add_argument("kind", choices=["switch", "wlc", "solarwinds", "smtp"])
     p.add_argument("--set", dest="cred_set", default="", help="switch credential set name from config.toml")
     sub.add_parser("check-config", help="validate config.toml and credentials")
+    sub.add_parser("fingerprint", help="read the SSH banner and web page title of every collected switch, per model "
+                                       "(no login), to write the Cisco patterns of the campus IP scan from")
     x = sub.add_parser("import-pfx", help="convert the wildcard certificate (.pfx) to the PEM files in config.toml")
     x.add_argument("pfx")
     m = sub.add_parser("make-cert", help="create a self-signed certificate for the API (until a trusted one is used)")
@@ -111,6 +114,8 @@ def main(argv=None):
         user = creds.store(cfg, args.kind, pw, args.cred_set or None)
         print(f"Stored the {label} password for user {user} in Windows Credential Manager.")
         return 0
+    if args.cmd == "fingerprint":
+        return _fingerprint(cfg)
     if args.cmd == "make-cert":
         return _make_cert(cfg, args.host, args.ip)
     if args.cmd == "import-pfx":
@@ -207,6 +212,42 @@ def _cctv(cfg):
         print(f"  Live in IPAM CCTV ranges but not in SolarWinds: {s.get('notInSolarWinds')}"
               + (f" (IPAM check failed: {snap.get('notInSolarWindsError')})" if snap.get("notInSolarWindsError") else ""))
     print(f"Saved {store.path('cctv.json')}")
+    return 0
+
+
+def _fingerprint(cfg):
+    """SSH banner + web title of every switch the last full run read (status ok), grouped by model.
+    Read-only: the banner is read on connect without sending anything, and the web check is one
+    unauthenticated GET /. No login. Output: data/fingerprint.txt (internal: keep it out of git)."""
+    from collections import Counter
+    from . import identify, scan
+    from .store import Store
+    store = Store(cfg["collector"]["data_dir"])
+    devs = [d for d in (store.read("latest.json", default={}) or {}).get("devices", []) if d.get("status") == "ok"]
+    if not devs:
+        print("No collected switches in latest.json yet. Run a full discovery first.")
+        return 1
+    ips = [d["ip"] for d in devs]
+    web_ports = [p for p in cfg["collector"]["scan_ports"] if p != 22]
+    banners = scan.ssh_banners(ips)
+    pages = identify.web_hints({ip: web_ports for ip in ips})
+    groups, missed = Counter(), set()
+    for d in devs:
+        model, banner, page = d.get("model") or "(unknown model)", banners.get(d["ip"]) or "", pages.get(d["ip"]) or ""
+        groups[(model, banner or "(none)", page or "(none) | (none)")] += 1  # page is "title | server"
+        if not identify.is_cisco(banner, page, cfg):
+            missed.add(model)
+    lines = ["# netmon fingerprint: model | SSH banner | web title | Server header | switches",
+             "# Read without logging in. Contains internal model data: keep it out of git.", ""]
+    lines += [f"{m} | {b} | {p} | {n}" for (m, b, p), n in sorted(groups.items())]
+    lines += ["", "Not recognised as Cisco by the current patterns (cisco_ssh_banners / cisco_web_patterns):"]
+    lines += [f"  {m}" for m in sorted(missed)] or ["  (none: every model is recognised)"]
+    path = store.path("fingerprint.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    for line in lines:
+        print(line)
+    print(f"Saved {path}")
     return 0
 
 

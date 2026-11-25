@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from . import build, config as config_mod, creds, devices, known as known_mod, parse, reports, scan, wlc
+from . import build, config as config_mod, creds, devices, identify, known as known_mod, parse, reports, scan, wlc
 from .store import Store, stamp
 
 log = logging.getLogger("netmon.run")
@@ -104,7 +104,9 @@ def _discover(cfg, store, trigger, by, started):
     # log in first time and do not generate repeated failed logins against TACACS+.
     cred_of = store.read("state", "credentials.json", default={}) or {}
 
-    # 1. IP range scanner: TCP 22 over sweep-enabled subnets, plus seeds and last run's devices.
+    # 1. Campus IP scan: tcp/22 over the sweep-enabled subnets plus seeds, last run's devices and known
+    #    switches; the web ports (collector.scan_ports: 443, 80) over the scan-only addresses.
+    progress = Progress(store, started, trigger, by)
     targets = list(scan.sweep_targets(cfg))
     previous = store.read("latest.json", default={}) or {}
     phone_re = col.get("phone_re")
@@ -120,10 +122,26 @@ def _discover(cfg, store, trigger, by, started):
     for d in previous.get("devices", []):
         _add_hints(hints, d.get("neighbors"))
     extra = [ip for ip in list(col["seeds"]) + known if config_mod.in_scope(cfg, ip)]
-    log.info("Sweeping %d addresses for tcp/22", len(targets) + len(extra))
-    probes = scan.probe(targets + extra, 22, col["connect_timeout"], col["scan_concurrency"])
+    # Seeds, last run's devices and known switches are switches already: no Cisco check for them.
+    # Every other address is "scan-only" and gets the switch passwords only if it identifies as Cisco.
+    trusted = set(col["seeds"]) | set(known)
+    scan_only = [ip for ip in targets if ip not in trusted]
+    scan_only_set = set(scan_only)
+    first = list(dict.fromkeys(targets + extra))
+    web_ports = [p for p in col["scan_ports"] if p != 22]
+    sweep = {"sweepDone": 0, "sweepTotal": len(first) + len(scan_only) * len(web_ports)}
+    progress.write(force=True, phase="sweep", **sweep)
+    log.info("Scanning %d addresses on tcp/22 and %d on %s", len(first), len(scan_only), web_ports)
+    probes = _probe_steps(first, 22, col, progress, sweep)
+    web_open = {}  # scan-only ip -> web ports that answered
+    for port in web_ports:
+        for ip, lat in _probe_steps(scan_only, port, col, progress, sweep).items():
+            if lat is not None:
+                web_open.setdefault(ip, []).append(port)
     open_ips = [ip for ip, lat in probes.items() if lat is not None]
-    closed = {ip for ip, lat in probes.items() if lat is None}
+    # Only addresses that matter later (Reconnect, no-SSH rows): never the scan-only ones. Neighbours
+    # that do not answer are added by the crawl below.
+    closed = {ip for ip, lat in probes.items() if lat is None and ip not in scan_only_set}
     # This probe is an up/down check too: the same switches the 15-minute check watches get their
     # miss counters updated, so a switch that missed the last check and this one is Down now.
     watched = {d["ip"] for d in previous.get("devices", []) if d.get("status") != "no-ssh"} | set(remembered)
@@ -131,33 +149,44 @@ def _discover(cfg, store, trigger, by, started):
     reach = dict(reach_prev, **known_mod.apply_probe(
         reach_prev, {ip: probes[ip] for ip in watched if ip in probes}, build.iso_now()))
     store.write({"checkedAt": build.iso_now(), "results": reach}, "reachability.json")
-    progress = Progress(store, started, trigger, by)
+
+    # Cisco check (identify): banner / web page of the scan-only hosts, read without logging in.
+    cisco_ssh, web_only, skipped = _cisco_gate(cfg, [ip for ip in open_ips if ip in scan_only_set], web_open)
     seeds, last_run = set(col["seeds"]), set(known)
     for ip in probes:
         if ip in seeds or ip in last_run:
             progress.mark(ip, source="core seed" if ip in seeds else "last run",
                           state="waiting" if ip not in closed else "no-ssh",
                           error=None if ip not in closed else "No answer on SSH (tcp/22)")
-        elif ip not in closed:
-            progress.mark(ip, source="subnet sweep")
-    progress.write(force=True, phase="ssh")
-    scan_info = {"subnets": len(cfg["subnets"]), "addresses": len(probes), "sshOpen": len(open_ips)}
+    for ip in cisco_ssh:
+        progress.mark(ip, source="IP scan (Cisco)")
+    scan_info = {"subnets": len(cfg["subnets"]), "addresses": len(probes), "sshOpen": len(open_ips),
+                 "webOpen": len(web_open), "ciscoSsh": len(cisco_ssh), "ciscoWebOnly": len(web_only),
+                 "nonCiscoSkipped": skipped}
+    progress.write(force=True, phase="ssh", scan=scan_info)
+    # The only addresses the switch passwords may go to: seeds, last run's devices and known switches
+    # that answer tcp/22, scan-only hosts that identified as Cisco, and (below) CDP/LLDP switch neighbours.
+    login_ips = [ip for ip in open_ips if ip not in scan_only_set] + cisco_ssh
+    # Built separately from login_ips on purpose: work() checks every login against it.
+    allowed = {ip for ip in open_ips if ip in trusted} | set(cisco_ssh)
 
     # 2-5. SSH authentication, device information, CDP + LLDP, recursive discovery.
     records, scanned = [], set()
-    store.status(phase="ssh", done=0, total=len(open_ips))
+    store.status(phase="ssh", done=0, total=len(login_ips))
     # Load netmiko once in this thread. Worker threads importing it for the first time at the same
     # moment raise "_DeadlockError ... netmiko.exceptions" (seen live: both Nexus seeds failed).
     import netmiko  # noqa: F401
     import netmiko.exceptions  # noqa: F401
 
     def work(ip):
+        if ip not in allowed:  # last check before any password leaves the collector; never expected
+            raise RuntimeError(f"{ip} was not cleared for login (not a known switch, neighbour or Cisco scan host)")
         progress.mark(ip, state="running")
         return _login_collect(cfg, ip, sets, platforms, cred_of, hints)
 
     with ThreadPoolExecutor(max_workers=col["ssh_workers"]) as pool:
         pending = set()
-        for ip in open_ips:
+        for ip in login_ips:
             scanned.add(ip)
             pending.add(pool.submit(work, ip))
         while pending:
@@ -186,6 +215,7 @@ def _discover(cfg, store, trigger, by, started):
                             closed.add(ip)
                             progress.mark(ip, state="no-ssh", error="No answer on SSH (tcp/22)")
                         else:
+                            allowed.add(ip)  # reported as a switch over CDP/LLDP: not gated
                             pending.add(pool.submit(work, ip))
             if done:
                 store.status(done=len(records), total=len(records) + len(pending))
@@ -220,7 +250,7 @@ def _discover(cfg, store, trigger, by, started):
         cfg, records, wlcs, store.read("state", "links-baseline.json", default={}),
         prev_counters, scan_info,
         {"trigger": trigger, "triggeredBy": by, "startedAt": started}, ssh_closed=frozenset(closed),
-        known=remembered, reach=reach)
+        known=remembered, reach=reach, web_only=web_only)
     snapshot["finishedAt"] = build.iso_now()
     progress.write(force=True, phase="done", finishedAt=snapshot["finishedAt"])
     store.write(baseline, "state", "links-baseline.json")
@@ -230,9 +260,49 @@ def _discover(cfg, store, trigger, by, started):
     # full run (refresh_switch, forget_switch). The same data as latest.json in raw form; never passwords.
     store.write({"generatedAt": snapshot["generatedAt"], "finishedAt": snapshot["finishedAt"],
                  "meta": {"trigger": trigger, "triggeredBy": by, "startedAt": started}, "scan": scan_info,
-                 "records": records, "wlcs": wlcs, "closed": sorted(closed), "countersBase": prev_counters},
-                "state", "last-run.json")
+                 "records": records, "wlcs": wlcs, "closed": sorted(closed), "countersBase": prev_counters,
+                 "webOnly": web_only}, "state", "last-run.json")
     return snapshot
+
+
+def _probe_steps(ips, port, col, progress, sweep):
+    """scan.probe in steps, so the Discovery tab can show how far the campus scan has got."""
+    out, step = {}, max(col["scan_concurrency"] * 16, 1024)
+    for i in range(0, len(ips), step):
+        part = ips[i:i + step]
+        out.update(scan.probe(part, port, col["connect_timeout"], col["scan_concurrency"]))
+        sweep["sweepDone"] += len(part)
+        progress.write(**sweep)  # at most about once a second
+    return out
+
+
+def _cisco_gate(cfg, ssh_open, web_open):
+    """Decide which scan-only hosts may get the switch passwords. Returns (cisco_ssh, web_only, skipped).
+
+    ssh_open: scan-only hosts answering tcp/22; web_open: {scan-only ip: web ports that answered}.
+    Cisco + SSH -> cisco_ssh (logged in to). Cisco + web only -> web_only {ip, ports, hint} (listed,
+    never logged in to). Not Cisco -> only counted in skipped (not logged in to, not listed, not stored).
+    """
+    banners = scan.ssh_banners(ssh_open) if ssh_open else {}
+    # The web page is read only where the SSH banner did not already say Cisco.
+    need_web = {ip: ports for ip, ports in web_open.items() if not identify.is_cisco(banners.get(ip), "", cfg)}
+    pages = identify.web_hints(need_web)
+    cisco_ssh, web_only, skipped = [], [], 0
+    for ip in ssh_open:
+        if identify.is_cisco(banners.get(ip), pages.get(ip, ""), cfg):
+            cisco_ssh.append(ip)
+        else:
+            skipped += 1
+    ssh_set = set(ssh_open)
+    for ip, ports in web_open.items():
+        if ip in ssh_set:
+            continue
+        if identify.is_cisco(None, pages.get(ip, ""), cfg):
+            web_only.append({"ip": ip, "ports": ports, "hint": pages[ip]})
+        else:
+            skipped += 1
+    log.info("Cisco check: %d with SSH, %d web UI only, %d other hosts skipped", len(cisco_ssh), len(web_only), skipped)
+    return cisco_ssh, sorted(web_only, key=lambda w: tuple(int(x) for x in w["ip"].split("."))), skipped
 
 
 # Driver hints from what neighbours report over CDP/LLDP (e.g. "Cisco CBS350-24P-4G"), so SG/CBS/
@@ -316,7 +386,7 @@ def _rebuild_from_last(store, cfg, records, last, now, refreshed=None):
     snapshot, baseline, new_counters = build.build(
         cfg, records, last["wlcs"], store.read("state", "links-baseline.json", default={}), base,
         last["scan"], last["meta"], ssh_closed=frozenset(last.get("closed", [])), now=now,
-        known=known_mod.load(store), reach=_reach_results(store))
+        known=known_mod.load(store), reach=_reach_results(store), web_only=last.get("webOnly"))
     snapshot.update(generatedAt=last["generatedAt"], finishedAt=last.get("finishedAt"), refreshedAt=now)
     store.write(baseline, "state", "links-baseline.json")
     if refreshed and refreshed in new_counters:

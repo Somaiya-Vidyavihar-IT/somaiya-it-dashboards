@@ -90,6 +90,39 @@ class Cli(unittest.TestCase):
         detect.assert_not_called()
         self.assertEqual(calls, [("cisco_s300", "u2")], "learned driver and learned account first")
 
+    def test_fingerprint_reads_only_banners_and_titles(self):
+        from netmon.store import Store
+        store = Store(self.cfg["collector"]["data_dir"])
+        dev = lambda ip, model, status="ok": {"ip": ip, "model": model, "status": status, "hostname": "h" + ip[-1]}
+        store.write({"devices": [dev("10.0.0.1", "N9K-C93180YC-FX"), dev("10.0.0.2", "C9300-48P"), dev("10.0.0.3", "C9300-48P"),
+                                 dev("10.0.0.4", "CBS350-24P-4G"), dev("10.0.0.5", "C9300-48P", "failed"),
+                                 dev("10.0.0.6", "SG350-28P", "down")]}, "latest.json")
+        banners = {"10.0.0.1": "SSH-2.0-OpenSSH_8.3", "10.0.0.2": "SSH-2.0-Cisco-1.25", "10.0.0.3": "SSH-2.0-Cisco-1.25",
+                   "10.0.0.4": "SSH-2.0-OpenSSH_7.4"}
+        pages = {"10.0.0.4": "Cisco CBS350 | "}
+        boom = AssertionError("no login")
+        out = []
+        with mock.patch("netmon.config.load", return_value=self.cfg), mock.patch("logging.basicConfig"), \
+                mock.patch("logging.FileHandler"), \
+                mock.patch("netmon.scan.ssh_banners", side_effect=lambda ips, *a, **k: {ip: banners.get(ip) for ip in ips}) as sb, \
+                mock.patch("netmon.identify.web_hint", side_effect=lambda ip, ports, timeout=4.0: pages.get(ip, "")) as wh, \
+                mock.patch("netmiko.ConnectHandler", side_effect=boom), mock.patch("netmon.devices.collect", side_effect=boom), \
+                mock.patch("netmon.devices.detect_platform", side_effect=boom), mock.patch("netmon.creds.switch_sets", side_effect=boom), \
+                mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+            self.assertEqual(cli.main(["fingerprint"]), 0)
+        self.assertEqual(sorted(sb.call_args.args[0]), ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"], "status ok only")
+        self.assertEqual(sorted(c.args[0] for c in wh.call_args_list), ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"])
+        self.assertEqual(wh.call_args_list[0].args[1], [443, 80])
+        with open(store.path("fingerprint.txt"), encoding="utf-8") as fh:
+            text = fh.read()
+        lines = [l for l in text.splitlines() if " | " in l and not l.startswith("#")]
+        self.assertEqual(lines, ["C9300-48P | SSH-2.0-Cisco-1.25 | (none) | (none) | 2",
+                                 "CBS350-24P-4G | SSH-2.0-OpenSSH_7.4 | Cisco CBS350 |  | 1",
+                                 "N9K-C93180YC-FX | SSH-2.0-OpenSSH_8.3 | (none) | (none) | 1"])
+        self.assertIn("N9K-C93180YC-FX", text.split("Not recognised as Cisco")[1], "models the patterns miss are named")
+        self.assertNotIn("CBS350", text.split("Not recognised as Cisco")[1])
+        self.assertTrue(any("fingerprint.txt" in l for l in out))
+
     def test_store_rejects_unknown_set(self):
         with self.assertRaises(creds.CredentialError):
             creds.store(self.cfg, "switch", "x", "set9")

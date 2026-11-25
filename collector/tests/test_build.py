@@ -239,6 +239,19 @@ class BuildSnapshot(unittest.TestCase):
         self.assertFalse(any("10.0.0.1" in k for k in base2))
 
 
+class CampusScan(unittest.TestCase):
+    def test_web_only_cisco_hosts_listed_with_institute_and_scan_counts_kept(self):
+        scan = {"subnets": 3, "addresses": 300, "sshOpen": 4, "webOpen": 7, "ciscoSsh": 1, "ciscoWebOnly": 2,
+                "nonCiscoSkipped": 6}
+        web_only = [{"ip": "10.0.1.20", "ports": [443, 80], "hint": "Cisco Business Dashboard | "},
+                    {"ip": "10.0.9.5", "ports": [80], "hint": " | cisco-IOS"}]
+        snap, _, _ = build.build(CFG, campus(), WLC, scan_info=scan, web_only=web_only, now="2026-11-05T02:30:00Z")
+        self.assertEqual(snap["scan"], scan)
+        self.assertEqual(snap["webOnly"], [dict(web_only[0], institute="Engineering"), dict(web_only[1], institute="Campus")])
+        self.assertNotIn("10.0.1.20", [d["ip"] for d in snap["devices"]], "web-only hosts are not switches")
+        self.assertEqual(build.build(CFG, campus(), WLC)[0]["webOnly"], [], "older callers: empty list")
+
+
 class DownSwitches(unittest.TestCase):
     """A switch read before that stops answering tcp/22 stays listed as Down (2 missed checks)."""
 

@@ -16,8 +16,8 @@ switch_credential_sets = [
 ]
 wlc_username = "<READ_ONLY_WLC_USER>"
 ssh_workers = 20                          # parallel SSH sessions
-scan_concurrency = 512                    # parallel TCP/22 probes during the sweep
-connect_timeout = 1.5                     # seconds per TCP/22 probe
+scan_concurrency = 512                    # parallel TCP probes during the campus IP scan
+connect_timeout = 1.5                     # seconds per TCP probe (scan and up/down check)
 command_timeout = 60                      # seconds per show command
 keep_days = 30                            # snapshot, report and lost-link retention
 error_delta_threshold = 100               # receive errors per port between runs
@@ -40,7 +40,8 @@ aruba_ouis = []                           # extra AP OUIs, e.g. ["aa:bb:cc"]
 
 # One entry per management subnet (/16 to /24). The most specific match sets the institute.
 # platform: auto | cisco_ios | cisco_nxos | cisco_s300 (SG300/350/500/550, CBS350, C1300)
-# sweep = false crawls the subnet only through CDP/LLDP neighbours (useful for large /16s).
+# sweep = true: the campus IP scan probes every address on tcp 22/443/80 and logs in only to hosts that
+# identify as Cisco (SSH banner / web title); sweep = false crawls the subnet only through CDP/LLDP neighbours.
 [[subnets]]
 cidr = "10.255.0.0/23"                   # example only: use your real management subnets
 institute = "<INSTITUTE_NAME>"

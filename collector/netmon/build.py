@@ -66,8 +66,11 @@ def _neighbor_issues(rec):
 
 
 def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_info=None, meta=None,
-          ssh_closed=frozenset(), now=None, known=None, reach=None):
+          ssh_closed=frozenset(), now=None, known=None, reach=None, web_only=None):
     """Return (snapshot, links_baseline, counters).
+
+    web_only: Cisco hosts the campus IP scan found with a web UI but no SSH ({ip, ports, hint});
+    listed as they are (never logged in to), each with its institute.
 
     known: switches read before (known.load); reach: up/down results (known.apply_probe), after this
     run's tcp/22 probe or, for a rebuild, as they are now. A known switch with no record and no
@@ -382,6 +385,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
         "devices": sorted(devices, key=lambda d: (d["institute"], d["depth"] if d["depth"] is not None else 99, d["hostname"] or d["ip"])),
         "links": sorted(links.values(), key=lambda l: (l["aName"], l["aPort"])),
         "problemPorts": problem_ports, "aps": aps, "findings": findings,
+        "webOnly": [dict(w, institute=institute(w["ip"])) for w in web_only or []],
     }
     return snapshot, baseline, new_counters
 

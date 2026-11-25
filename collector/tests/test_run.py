@@ -6,7 +6,9 @@ from unittest import mock
 
 from netmon import config, known, run
 from netmon.store import Store
-from tests.test_build import WLC, campus, nbr
+from tests.test_build import WLC, campus, nbr, rec
+
+CISCO = "SSH-2.0-Cisco-1.25"
 
 
 class FullRunOrchestration(unittest.TestCase):
@@ -20,6 +22,12 @@ class FullRunOrchestration(unittest.TestCase):
             "wlc": {"hosts": ["10.0.0.5"]},
         })
         self.records = {r["ip"]: r for r in campus()}
+        # Never read a real banner or web page: every scan-found host identifies as Cisco unless a test says otherwise.
+        for target, kw in (("netmon.scan.ssh_banners", {"side_effect": lambda ips, *a, **k: {ip: CISCO for ip in ips}}),
+                           ("netmon.identify.web_hint", {"return_value": ""})):
+            patcher = mock.patch(target, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -455,6 +463,123 @@ class FullRunOrchestration(unittest.TestCase):
         self.assertEqual(run.forget_switch(self.cfg, "10.0.1.1", "net@somaiya.edu"), 1)
         self.assertIn("full discovery run is in progress", store.read("refresh-status.json")["error"])
         store.release()
+
+    # ---- Cisco-only campus scan ----
+    def _scan_cfg(self, **col):
+        return config.validate({"collector": {"switch_username": "u", "data_dir": self.tmp.name, **col},
+                                "subnets": [{"cidr": "10.0.2.0/29", "institute": "Engineering"}]})
+
+    def _scan_run(self, open_ports, banners, pages, collect=None, cfg=None):
+        """Full run with the scan mocked: open_ports {(ip, port)}, banners {ip: line}, pages {ip: web hint}.
+        _login_collect is replaced; returns (store, logins, probe calls, web_hint calls)."""
+        probed, logins, web_calls = [], [], []
+
+        def probe(ips, port=22, *a, **k):
+            ips = list(ips)
+            probed.append((port, ips))
+            return {ip: (1.0 if (ip, port) in open_ports else None) for ip in ips}
+
+        def login(cfg_, ip, *a):
+            logins.append(ip)
+            return copy.deepcopy((collect or {}).get(ip) or rec(ip, "sw-" + ip.split(".")[-1], "cisco_ios", []))
+
+        def web_hint(ip, ports, timeout=4.0):
+            web_calls.append((ip, list(ports)))
+            return pages.get(ip, "")
+        with mock.patch("netmon.scan.probe", side_effect=probe), \
+                mock.patch("netmon.scan.ssh_banners", side_effect=lambda ips, *a, **k: {ip: banners.get(ip) for ip in ips}), \
+                mock.patch("netmon.identify.web_hint", side_effect=web_hint), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.run._login_collect", side_effect=login):
+            self.assertEqual(run.full_run(cfg or self._scan_cfg()), 0)
+        return Store(self.tmp.name), logins, probed, web_calls
+
+    def test_sweep_logs_in_only_to_cisco_hosts(self):
+        a, b, c, d = "10.0.2.1", "10.0.2.2", "10.0.2.3", "10.0.2.4"
+        open_ports = {(a, 22), (b, 22), (b, 80), (c, 443), (d, 80)}
+        banners = {a: CISCO, b: "SSH-2.0-OpenSSH_8.9p1"}
+        pages = {b: "Welcome | nginx", c: "Cisco Business Dashboard <b>x</b> | ", d: "Router | lighttpd"}
+        store, logins, probed, web_calls = self._scan_run(open_ports, banners, pages)
+        self.assertEqual(logins, [a], "only the host that identified as Cisco gets the switch passwords")
+        self.assertEqual(sorted(p for p, _ in probed), [22, 80, 443], "tcp 22, 443 and 80 are probed")
+        self.assertEqual(sorted(ip for ip, _ in web_calls), [b, c, d], "web page read only where SSH did not say Cisco")
+        self.assertIn((c, [443]), web_calls)
+        latest = store.read("latest.json")
+        self.assertEqual([x["ip"] for x in latest["devices"]], [a])
+        self.assertEqual(latest["webOnly"], [{"ip": c, "ports": [443], "hint": pages[c], "institute": "Engineering"}])
+        self.assertEqual({k: latest["scan"][k] for k in ("addresses", "sshOpen", "webOpen", "ciscoSsh", "ciscoWebOnly",
+                                                         "nonCiscoSkipped")},
+                         {"addresses": 6, "sshOpen": 2, "webOpen": 3, "ciscoSsh": 1, "ciscoWebOnly": 1, "nonCiscoSkipped": 2})
+        self.assertNotIn(b, known.load(store), "a non-Cisco host is never remembered")
+        last = store.read("state", "last-run.json")
+        self.assertEqual(last["webOnly"], [{"ip": c, "ports": [443], "hint": pages[c]}], "raw; institute added by build")
+        self.assertEqual(last["closed"], [], "scan-only addresses that did not answer are not kept")
+        prog = store.read("run-progress.json")
+        self.assertEqual([i["ip"] for i in prog["items"]], [a], "non-Cisco and web-only hosts are not listed")
+        self.assertEqual(prog["items"][0]["source"], "IP scan (Cisco)")
+        self.assertEqual(prog["sweepTotal"], 6 * 3, "tcp/22 on every address, then 443 and 80 on the scan-only ones")
+        self.assertEqual(prog["sweepDone"], prog["sweepTotal"])
+        self.assertEqual(prog["scan"]["nonCiscoSkipped"], 2)
+        # Reconnect from the dashboard cannot reach a host the scan dropped or only listed.
+        for ip in (b, c, d):
+            with mock.patch("netmon.run._login_collect", side_effect=AssertionError("no login")), \
+                    mock.patch("netmon.scan.probe", side_effect=AssertionError("no probe")):
+                self.assertEqual(run.refresh_switch(self._scan_cfg(), ip, "net@somaiya.edu"), 1, ip)
+            self.assertIn("not a switch from the last full discovery run", store.read("refresh-status.json")["error"])
+        # A rebuild (refresh of the Cisco switch) keeps the web-only list.
+        with mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]), \
+                mock.patch("netmon.run._login_collect", return_value=rec(a, "sw-1", "cisco_ios", [])):
+            self.assertEqual(run.refresh_switch(self._scan_cfg(), a, "net@somaiya.edu"), 0)
+        self.assertEqual(store.read("latest.json")["webOnly"], latest["webOnly"])
+
+    def test_ssh_host_whose_web_page_says_cisco_is_logged_in(self):
+        """SG/CBS-style: an OpenSSH banner, but the web page identifies the host as Cisco."""
+        e = "10.0.2.5"
+        store, logins, _, web_calls = self._scan_run({(e, 22), (e, 443)}, {e: "SSH-2.0-OpenSSH_7.4"},
+                                                     {e: "Cisco CBS350 | "})
+        self.assertEqual(logins, [e])
+        self.assertEqual(web_calls, [(e, [443])])
+        scan_counts = store.read("latest.json")["scan"]
+        self.assertEqual((scan_counts["ciscoSsh"], scan_counts["ciscoWebOnly"], scan_counts["nonCiscoSkipped"]), (1, 0, 0))
+
+    def test_neighbour_found_switch_not_gated(self):
+        a, n = "10.0.2.1", "10.0.2.5"
+        sw1 = rec(a, "sw-1", "cisco_ios", [nbr("Gi1/0/1", "asw-05", n, "Gi0/1")])
+        store, logins, _, _ = self._scan_run({(a, 22), (n, 22)}, {a: CISCO, n: "SSH-2.0-OpenSSH_8.9p1"}, {}, collect={a: sw1})
+        self.assertEqual(logins, [a, n], "a switch its neighbour reports over CDP/LLDP is read even with an OpenSSH banner")
+        self.assertEqual(store.read("latest.json")["scan"]["nonCiscoSkipped"], 1, "skipped by the scan, then found as a neighbour")
+        items = {i["ip"]: i for i in store.read("run-progress.json")["items"]}
+        self.assertEqual(items[n]["source"], "neighbour of sw-1 Gi1/0/1")
+
+    def test_seeds_and_known_switches_are_not_gated(self):
+        seed, old = "10.0.2.1", "10.0.2.2"
+        known.save(Store(self.tmp.name), {old: {"ip": old, "hostname": "asw-02", "uplinks": []}})
+        nexus = "SSH-2.0-OpenSSH_8.3"
+        _, logins, probed, web_calls = self._scan_run({(seed, 22), (old, 22)}, {seed: nexus, old: nexus}, {},
+                                                      cfg=self._scan_cfg(seeds=[seed]))
+        self.assertEqual(sorted(logins), [seed, old])
+        self.assertEqual(web_calls, [])
+        self.assertEqual(sorted({ip for p, ips in probed if p != 22 for ip in ips}),
+                         ["10.0.2.3", "10.0.2.4", "10.0.2.5", "10.0.2.6"], "web ports only on scan-only addresses")
+
+    def test_cisco_host_with_every_set_rejected_is_listed_failed(self):
+        a = "10.0.2.1"
+        sets = [("set1", "u1", "p1"), ("set2", "u2", "p2"), ("set3", "u3", "p3")]
+        tried = []
+
+        def detect(ip, user, pw, cfg_):
+            tried.append((ip, user))
+            raise type("NetmikoAuthenticationException", (Exception,), {})("auth failed")
+        with mock.patch("netmon.scan.probe", side_effect=lambda ips, port=22, *x, **k: {
+                    ip: (1.0 if (ip, port) == (a, 22) else None) for ip in ips}), \
+                mock.patch("netmon.creds.switch_sets", return_value=sets), \
+                mock.patch("netmon.devices.detect_platform", side_effect=detect):
+            self.assertEqual(run.full_run(self._scan_cfg()), 0)
+        self.assertEqual(tried, [(a, "u1"), (a, "u2"), (a, "u3")])
+        dev = Store(self.tmp.name).read("latest.json")["devices"]
+        self.assertEqual([(d["ip"], d["status"], d["error"]) for d in dev],
+                         [(a, "failed", "SSH authentication failed with all 3 credential sets")])
+        self.assertIn(a, known.load(Store(self.tmp.name)), "a Cisco host is remembered like any switch")
 
     def test_second_run_refused_while_locked(self):
         store = Store(self.tmp.name)
