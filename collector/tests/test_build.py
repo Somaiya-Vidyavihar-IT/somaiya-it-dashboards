@@ -252,6 +252,30 @@ class Config(unittest.TestCase):
             config.validate({"collector": {"switch_credential_sets": [{"name": "bad name", "username": "x"}]},
                              "subnets": [{"cidr": "10.0.0.0/24"}]})
 
+    def test_new_defaults(self):
+        col = config.validate({"collector": {"switch_username": "u"}, "subnets": [{"cidr": "10.0.0.0/24"}]})["collector"]
+        self.assertEqual(col["poe_threshold"], 75)
+        self.assertEqual(col["uplink_threshold"], 75)
+        self.assertEqual(col["uplink_fast_minutes"], 10)
+        self.assertEqual(col["uplink_slow_minutes"], 30)
+        self.assertEqual(col["uplink_workers"], 16)
+        self.assertEqual(col["scan_ports"], [22, 443, 80])
+        self.assertTrue(col["cisco_ssh_re"][0].search("SSH-2.0-Cisco-1.25"))
+        self.assertTrue(col["cisco_web_re"][0].search("Cisco Systems"))
+
+    def test_bad_cisco_pattern_rejected(self):
+        with self.assertRaises(config.ConfigError) as ctx:
+            config.validate({"collector": {"switch_username": "u", "cisco_ssh_banners": ["("]},
+                             "subnets": [{"cidr": "10.0.0.0/24"}]})
+        self.assertIn("collector.cisco_ssh_banners", str(ctx.exception))
+
+    def test_bad_uplink_values_rejected(self):
+        for key, bad in (("uplink_threshold", 0), ("uplink_threshold", 101), ("poe_threshold", "x"),
+                         ("uplink_fast_minutes", 0), ("uplink_workers", 0), ("scan_ports", [0]),
+                         ("cisco_web_patterns", "cisco")):
+            with self.assertRaises(config.ConfigError, msg=key):
+                config.validate({"collector": {"switch_username": "u", key: bad}, "subnets": [{"cidr": "10.0.0.0/24"}]})
+
     def test_example_config_parses(self):
         import tomllib
         path = os.path.join(os.path.dirname(__file__), "..", "config.example.toml")

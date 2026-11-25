@@ -49,7 +49,14 @@ def validate(raw):
     col.setdefault("keep_days", 30)
     col.setdefault("error_delta_threshold", 100)
     col.setdefault("cpu_threshold", 80)
-    col.setdefault("poe_threshold", 80)
+    col.setdefault("poe_threshold", 75)
+    col.setdefault("uplink_threshold", 75)      # percent of link speed, busiest direction
+    col.setdefault("uplink_fast_minutes", 10)
+    col.setdefault("uplink_slow_minutes", 30)
+    col.setdefault("uplink_workers", 16)
+    col.setdefault("scan_ports", [22, 443, 80])
+    col.setdefault("cisco_ssh_banners", ["(?i)cisco"])
+    col.setdefault("cisco_web_patterns", ["(?i)cisco"])
     col.setdefault("core_hostname_pattern", "")
     col.setdefault("seeds", [])
     col.setdefault("exclude", [])
@@ -78,6 +85,24 @@ def validate(raw):
     for key in ("ssh_workers", "scan_concurrency", "keep_days"):
         if not isinstance(col[key], int) or col[key] < 1:
             raise ConfigError(f"collector.{key} must be a positive integer")
+    for key in ("poe_threshold", "uplink_threshold"):
+        if isinstance(col[key], bool) or not isinstance(col[key], int) or not 1 <= col[key] <= 100:
+            raise ConfigError(f"collector.{key} must be a whole number from 1 to 100")
+    for key in ("uplink_fast_minutes", "uplink_slow_minutes", "uplink_workers"):
+        if isinstance(col[key], bool) or not isinstance(col[key], int) or col[key] < 1:
+            raise ConfigError(f"collector.{key} must be a positive integer")
+    ports = col["scan_ports"]
+    if not isinstance(ports, list) or not ports or not all(isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536
+                                                           for p in ports):
+        raise ConfigError("collector.scan_ports must be a list of port numbers, e.g. [22, 443, 80]")
+    for key, out in (("cisco_ssh_banners", "cisco_ssh_re"), ("cisco_web_patterns", "cisco_web_re")):
+        pats = col[key]
+        if not isinstance(pats, list) or not all(isinstance(p, str) for p in pats):
+            raise ConfigError(f'collector.{key} must be a list of regular expressions, e.g. ["(?i)cisco"]')
+        try:
+            col[out] = [re.compile(p) for p in pats]
+        except re.error as exc:
+            raise ConfigError(f"collector.{key} has an invalid regex: {exc}")
     if col["core_hostname_pattern"]:
         try:
             re.compile(col["core_hostname_pattern"])

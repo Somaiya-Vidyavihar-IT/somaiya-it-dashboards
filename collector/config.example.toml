@@ -22,7 +22,14 @@ command_timeout = 60                      # seconds per show command
 keep_days = 30                            # snapshot, report and lost-link retention
 error_delta_threshold = 100               # receive errors per port between runs
 cpu_threshold = 80                        # percent, 1-minute average
-poe_threshold = 80                        # percent of PoE budget used
+poe_threshold = 75                        # percent of PoE budget used
+uplink_threshold = 75                     # percent of link speed (busiest direction) on uplinks
+uplink_fast_minutes = 10                  # uplink load poll interval while an uplink is above the threshold
+uplink_slow_minutes = 30                  # uplink load poll interval otherwise
+uplink_workers = 16                       # parallel SSH sessions for uplink polling
+# scan_ports = [22, 443, 80]              # ports probed by the campus IP scan
+# cisco_ssh_banners = ["(?i)cisco"]       # regexes matched against the SSH banner to spot Cisco devices
+# cisco_web_patterns = ["(?i)cisco"]      # regexes matched against the web page to spot Cisco devices
 core_hostname_pattern = ""                # regex; blank = every NX-OS (Nexus) switch is core
 seeds = []                                # extra start IPs, e.g. ["<NEXUS_MGMT_IP>"]
 exclude = []                              # CIDRs never to touch, e.g. ["<CIDR>"]
