@@ -48,6 +48,23 @@ def _ap_model(n):
     return m.group(1) if m else ""
 
 
+def _neighbor_issues(rec):
+    """CDP/LLDP commands that were not read cleanly: fallback parser, rejected, failed, or output but no neighbours."""
+    seen = {p for n in rec.get("neighbors") or [] for p in n.get("via") or []}
+    out = []
+    for c in rec.get("commands") or []:
+        purpose, result, lines = c.get("purpose"), c.get("result"), c.get("lines") or 0
+        if purpose not in ("cdp", "lldp"):
+            continue
+        if result in ("ok", "fallback") and lines > 3 and purpose not in seen:
+            result = "empty"
+        elif result not in ("fallback", "rejected", "failed"):
+            continue
+        out.append({"purpose": purpose, "command": c.get("command", ""), "result": result,
+                    "detail": c.get("detail", ""), "lines": c.get("lines")})
+    return out
+
+
 def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_info=None, meta=None,
           ssh_closed=frozenset(), now=None):
     """Return (snapshot, links_baseline, counters)."""
@@ -197,7 +214,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
              "uptime": r.get("uptime", ""), "role": role_of(ip), "depth": depth.get(ip),
              "status": "ok" if r["ok"] else "failed", "error": r.get("error"), "warnings": r.get("warnings", [])[:10],
              "cpu": r.get("cpu"), "poe": None, "ports": None, "errDelta": None, "flags": [], "neighbors": [],
-             "commands": r.get("commands", [])[:80],
+             "commands": r.get("commands", [])[:80], "neighborIssues": [],
              "credentialSet": r.get("credentialSet", "") if r["ok"] else "",
              "loginUser": user_of.get(r.get("credentialSet"), "") if r["ok"] else ""}
         if r.get("refreshedAt"):  # re-read on its own from the dashboard after the full run
@@ -245,6 +262,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                 d["errDelta"] = total
         if d["ports"]["errDisabled"]:
             d["flags"].append("err-disabled")
+        d["neighborIssues"] = _neighbor_issues(r)
         d["neighbors"] = [{"localPort": n["localPort"], "name": n["name"][:80], "ip": n["ip"], "remotePort": n["remotePort"],
                            "platform": n["platform"][:60], "via": n["via"], "kind": n.get("kind", "other"),
                            "peer": n.get("peer", "")} for n in r["neighbors"]]
@@ -302,7 +320,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
         "linksLost": sum(l["status"] == "lost" for l in links.values()),
         "uplinksDown": sum(l["uplink"] and l["status"] in ("down", "lost") for l in links.values()),
         "problemPorts": len(problem_ports), "poeHigh": sum("poe" in d["flags"] for d in devices),
-        "cpuHigh": sum("cpu" in d["flags"] for d in devices), "aps": len(aps),
+        "cpuHigh": sum("cpu" in d["flags"] for d in devices),
+        "neighborIssues": sum(bool(d.get("neighborIssues")) for d in devices), "aps": len(aps),
         "apsUp": sum(a["status"].lower().startswith("up") for a in aps), "findings": len(findings),
     }
     institutes = defaultdict(lambda: {"switches": 0, "failed": 0, "aps": 0, "apsDown": 0, "problems": 0})

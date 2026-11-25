@@ -104,6 +104,48 @@ class BuildSnapshot(unittest.TestCase):
             self.assertEqual((dev[ip]["credentialSet"], dev[ip]["loginUser"]), ("", ""), ip)
         self.assertNotIn("password", " ".join(dev["10.0.0.1"]))
 
+    def test_neighbor_issues_lists_failed_rejected_fallback_and_empty(self):
+        def c(purpose, result, lines=20, detail=""):
+            return {"command": f"show {purpose} neighbors detail", "purpose": purpose, "result": result,
+                    "detail": detail, "lines": lines}
+        recs = [
+            rec("10.0.1.1", "a-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["lldp"])],
+                commands=[c("cdp", "fallback", 12, "text parser"), c("lldp", "ok")]),
+            rec("10.0.1.2", "b-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["lldp"])],
+                commands=[c("cdp", "rejected", 2, "% Invalid input"), c("lldp", "ok")]),
+            rec("10.0.1.3", "c-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["cdp"])],
+                commands=[c("cdp", "ok"), c("lldp", "failed", None, "timeout")]),
+            rec("10.0.1.4", "d-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["cdp"])],
+                commands=[c("cdp", "ok"), c("lldp", "ok", 9)]),
+        ]
+        recs[2]["commands"][1].pop("lines")
+        snap, _, _ = build.build(CFG, recs, [], now="2026-11-05T02:30:00Z")
+        got = {d["ip"]: [(i["purpose"], i["result"]) for i in d["neighborIssues"]] for d in snap["devices"]
+               if d["status"] == "ok"}
+        self.assertEqual(got["10.0.1.1"], [("cdp", "empty")])  # fallback read nothing from 12 lines
+        self.assertEqual(got["10.0.1.2"], [("cdp", "rejected")])
+        self.assertEqual(got["10.0.1.3"], [("lldp", "failed")])
+        self.assertEqual(got["10.0.1.4"], [("lldp", "empty")])
+        self.assertEqual(snap["summary"]["neighborIssues"], 4)
+
+    def test_neighbor_issue_fallback_that_read_neighbours_stays_fallback(self):
+        r = rec("10.0.1.1", "a-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["cdp", "lldp"])],
+                commands=[{"command": "show cdp neighbors detail", "purpose": "cdp", "result": "fallback",
+                           "detail": "text parser", "lines": 12}])
+        snap, _, _ = build.build(CFG, [r], [], now="2026-11-05T02:30:00Z")
+        self.assertEqual([i["result"] for i in snap["devices"][0]["neighborIssues"]], ["fallback"])
+
+    def test_clean_switch_has_no_neighbor_issues(self):
+        r = rec("10.0.1.1", "a-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1")],
+                commands=[{"command": "show cdp neighbors detail", "purpose": "cdp", "result": "ok", "detail": "", "lines": 30},
+                          {"command": "show lldp neighbors detail", "purpose": "lldp", "result": "ok", "detail": "", "lines": 3},
+                          {"command": "show version", "purpose": "version", "result": "ok", "detail": "", "lines": 50}])
+        snap, _, _ = build.build(CFG, [r, campus()[3]], [], now="2026-11-05T02:30:00Z")
+        d = {x["ip"]: x for x in snap["devices"]}
+        self.assertEqual(d["10.0.1.1"]["neighborIssues"], [])
+        self.assertEqual(d["10.0.1.3"]["neighborIssues"], [])
+        self.assertEqual(snap["summary"]["neighborIssues"], 0)
+
     def test_neighbour_switch_without_ssh_gets_its_own_row(self):
         """Seen live: the hostel distribution switches under the core block SSH from the collector and
         were only an info finding, so the dashboard showed no hostel switches at all."""

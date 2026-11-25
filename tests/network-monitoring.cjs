@@ -10,11 +10,11 @@ assert.ok(!/<button(?![^>]*type="button")/.test(html),'Buttons declare type="but
 
 const API='https://netmon.test:8443';
 const snapshot={schema:1,generatedAt:'2026-11-05T02:30:00Z',trigger:'scheduled',triggeredBy:'',
- summary:{switches:4,collected:2,failed:1,noSsh:1,links:1,linksLost:0,uplinksDown:0,problemPorts:1,poeHigh:1,cpuHigh:0,aps:2,apsUp:1,findings:2},
+ summary:{switches:4,collected:2,failed:1,noSsh:1,links:1,linksLost:0,uplinksDown:0,problemPorts:1,poeHigh:1,cpuHigh:0,neighborIssues:1,aps:2,apsUp:1,findings:2},
  institutes:[{name:'DC',switches:1,failed:0,aps:0,apsDown:0,problems:0},{name:'Engineering',switches:2,failed:1,aps:2,apsDown:1,problems:2}],
  devices:[
   {ip:'10.0.0.1',hostname:'core-01',institute:'DC',platform:'cisco_nxos',model:'N9K-C93180YC-FX',serial:'S1',version:'10.2',uptime:'1 week',role:'core',depth:0,status:'ok',error:null,warnings:[],cpu:4,poe:null,ports:{total:54,connected:20,errDisabled:0},errDelta:0,flags:[],neighbors:[]},
-  {ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',institute:'Engineering',platform:'cisco_ios',model:'C9300-48P',serial:'S2',version:'17.9',uptime:'2 weeks',role:'distribution',depth:1,status:'ok',error:null,warnings:[],cpu:10,poe:{availableW:740,usedW:700,pct:95},ports:{total:52,connected:30,errDisabled:1},errDelta:null,flags:['poe','err-disabled'],credentialSet:'set2',loginUser:'ro-<i>user</i>',commands:[{command:'terminal width 511',purpose:'session',result:'setup',detail:''},{command:'show power inline',purpose:'poe',result:'rejected',detail:'% Invalid <b>input</b>',lines:2,seconds:0.4}],neighbors:[{localPort:'Te1/1/4',name:'core-01',ip:'10.0.0.1',remotePort:'Eth1/10',platform:'N9K',via:['cdp','lldp'],kind:'switch',peer:'10.0.0.1'}]},
+  {ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',institute:'Engineering',platform:'cisco_ios',model:'C9300-48P',serial:'S2',version:'17.9',uptime:'2 weeks',role:'distribution',depth:1,status:'ok',error:null,warnings:[],cpu:10,poe:{availableW:740,usedW:700,pct:95},ports:{total:52,connected:30,errDisabled:1},errDelta:null,flags:['poe','err-disabled'],credentialSet:'set2',loginUser:'ro-<i>user</i>',neighborIssues:[{purpose:'cdp',command:'show cdp neighbors detail',result:'rejected',detail:'% Invalid <b>input</b>',lines:2}],commands:[{command:'terminal width 511',purpose:'session',result:'setup',detail:''},{command:'show power inline',purpose:'poe',result:'rejected',detail:'% Invalid <b>input</b>',lines:2,seconds:0.4}],neighbors:[{localPort:'Te1/1/4',name:'core-01',ip:'10.0.0.1',remotePort:'Eth1/10',platform:'N9K',via:['cdp','lldp'],kind:'switch',peer:'10.0.0.1'}]},
   {ip:'10.0.9.1',hostname:'HOSTEL_DIST_SW',institute:'Engineering',platform:'',model:'C9300-24T',serial:'',version:'',uptime:'',role:'distribution',depth:1,status:'no-ssh',error:'Does not answer SSH (tcp/22) from the collector',warnings:[],cpu:null,poe:null,ports:null,errDelta:null,flags:['no-ssh'],neighbors:[],commands:[],seenFrom:[{ip:'10.0.0.1',hostname:'core-01',port:'Eth1/11',remotePort:'Te1/1/1'}]},
   {ip:'10.0.1.3',hostname:'',institute:'Engineering',platform:'',model:'',serial:'',version:'',uptime:'',role:'unknown',depth:null,status:'failed',error:'SSH authentication failed',warnings:[],cpu:null,poe:null,ports:null,errDelta:null,flags:['ssh-failed'],neighbors:[]}],
  links:[{a:'10.0.0.1',aPort:'Eth1/10',b:'10.0.1.1',bPort:'Te1/1/4',via:['cdp','lldp'],both:true,status:'up',uplink:true,downstream:'10.0.1.1',aName:'core-01',bName:'dsw-01'}],
@@ -60,7 +60,17 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  assert.ok(h.el('sw-rows').innerHTML.includes('SSH failed'));
  assert.ok(h.el('ap-rows').innerHTML.includes('CNTEST0001')&&h.el('ap-rows').innerHTML.includes('Not up')===false);
  assert.ok(h.el('topo').innerHTML.includes('core-01')&&h.el('topo').innerHTML.includes('Not linked to the core'));
- assert.ok(h.el('port-rows').innerHTML.includes('Gi1/0/9'));assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
+ assert.ok(h.el('port-rows').innerHTML.includes('Gi1/0/9'));
+ {const nb=h.el('nb-rows').innerHTML;assert.ok(nb.includes('dsw-&lt;img')&&nb.includes('CDP')&&nb.includes('Rejected')&&nb.includes('% Invalid &lt;b&gt;input&lt;/b&gt;')&&!nb.includes('<b>input'),'Neighbour issues listed, detail escaped');
+  assert.ok(nb.includes('C9300-48P')&&nb.includes('17.9')&&nb.includes('cisco_ios')&&nb.includes('set2')&&nb.includes('data-ip="10.0.1.1"'),'Neighbour issue columns');
+  assert.ok(h.el('stats').innerHTML.includes('NEIGHBOUR ISSUES')&&h.el('stats').innerHTML.includes('data-go="neighbours"'),'Overview tile links to the tab');
+  vm.runInContext("document.getElementById('nb-cmd').value='lldp';renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('No neighbour issues match'),'Filter by command');
+  vm.runInContext("document.getElementById('nb-cmd').value='';document.getElementById('nb-result').value='failed';renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('0 of 1'),'Filter by result');
+  vm.runInContext("document.getElementById('nb-result').value='';document.getElementById('nb-inst').value='DC';renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('0 of 1'),'Filter by institute');
+  vm.runInContext("document.getElementById('nb-inst').value='';snap.devices.forEach(d=>delete d.neighborIssues);renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('class="empty"')&&h.el('nb-rows').innerHTML.includes('Listed after the next full run'),'Older snapshot shows the empty-state row');
+  vm.runInContext("snap.devices[0].neighborIssues=[];renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('No neighbour issues.'));
+  vm.runInContext("setView('neighbours')",h.ctx);assert.equal(h.el('neighbours-view').classList.contains('hidden'),false);}
+assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  assert.equal(h.el('run-now').hidden,false,'Run now shown to the IT Network Team');assert.equal(h.el('cert-help').hidden,true,'No certificate help once the API answers');
  assert.ok(h.el('data-note').textContent.includes('Last full run'));
  vm.runInContext("document.getElementById('sw-state').value='unreachable';renderSwitches()",h.ctx);assert.ok(h.el('sw-count').textContent.startsWith('1 of 4'));
