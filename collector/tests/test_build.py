@@ -104,7 +104,8 @@ class BuildSnapshot(unittest.TestCase):
             self.assertEqual((dev[ip]["credentialSet"], dev[ip]["loginUser"]), ("", ""), ip)
         self.assertNotIn("password", " ".join(dev["10.0.0.1"]))
 
-    def test_neighbor_issues_lists_failed_rejected_fallback_and_empty(self):
+    def test_neighbor_issues_lists_cdp_failures_only(self):
+        """The network team asked for CDP problems only (2026-11-26); LLDP problems are not listed."""
         def c(purpose, result, lines=20, detail=""):
             return {"command": f"show {purpose} neighbors detail", "purpose": purpose, "result": result,
                     "detail": detail, "lines": lines}
@@ -124,9 +125,9 @@ class BuildSnapshot(unittest.TestCase):
                if d["status"] == "ok"}
         self.assertEqual(got["10.0.1.1"], [("cdp", "empty")])  # fallback read nothing from 12 lines
         self.assertEqual(got["10.0.1.2"], [("cdp", "rejected")])
-        self.assertEqual(got["10.0.1.3"], [("lldp", "failed")])
-        self.assertEqual(got["10.0.1.4"], [("lldp", "empty")])
-        self.assertEqual(snap["summary"]["neighborIssues"], 4)
+        self.assertEqual(got["10.0.1.3"], [])  # LLDP failed: not listed
+        self.assertEqual(got["10.0.1.4"], [])  # LLDP read nothing: not listed
+        self.assertEqual(snap["summary"]["neighborIssues"], 2)
 
     def test_neighbor_issue_fallback_that_read_neighbours_stays_fallback(self):
         r = rec("10.0.1.1", "a-01", "cisco_ios", [nbr("Gi1/0/1", "x", "10.0.1.9", "g1", via=["cdp", "lldp"])],

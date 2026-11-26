@@ -64,8 +64,9 @@ const team=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',can
  {const nb=h.el('nb-rows').innerHTML;assert.ok(nb.includes('dsw-&lt;img')&&nb.includes('CDP')&&nb.includes('Rejected')&&nb.includes('% Invalid &lt;b&gt;input&lt;/b&gt;')&&!nb.includes('<b>input'),'Neighbour issues listed, detail escaped');
   assert.ok(nb.includes('C9300-48P')&&nb.includes('17.9')&&nb.includes('cisco_ios')&&nb.includes('set2')&&nb.includes('data-ip="10.0.1.1"'),'Neighbour issue columns');
   assert.ok(h.el('stats').innerHTML.includes('NEIGHBOUR ISSUES')&&h.el('stats').innerHTML.includes('data-go="neighbours"'),'Overview tile links to the tab');
-  vm.runInContext("document.getElementById('nb-cmd').value='lldp';renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('No neighbour issues match'),'Filter by command');
-  vm.runInContext("document.getElementById('nb-cmd').value='';document.getElementById('nb-result').value='failed';renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('0 of 1'),'Filter by result');
+  assert.ok(!/id="nb-cmd"/.test(html),'No CDP/LLDP command filter: CDP only');
+  vm.runInContext("snap.devices[1].neighborIssues.push({purpose:'lldp',command:'show lldp neighbors detail',result:'failed',detail:'timeout',lines:null});renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('1 of 1')&&!h.el('nb-rows').innerHTML.includes('show lldp'),'LLDP entries from older snapshots are not listed');
+  vm.runInContext("document.getElementById('nb-result').value='failed';renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('0 of 1'),'Filter by result');
   vm.runInContext("document.getElementById('nb-result').value='';document.getElementById('nb-inst').value='DC';renderNeighbours()",h.ctx);assert.ok(h.el('nb-count').textContent.startsWith('0 of 1'),'Filter by institute');
   vm.runInContext("document.getElementById('nb-inst').value='';snap.devices.forEach(d=>delete d.neighborIssues);renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('class="empty"')&&h.el('nb-rows').innerHTML.includes('Listed after the next full run'),'Older snapshot shows the empty-state row');
   vm.runInContext("snap.devices[0].neighborIssues=[];renderNeighbours()",h.ctx);assert.ok(h.el('nb-rows').innerHTML.includes('No neighbour issues.'));

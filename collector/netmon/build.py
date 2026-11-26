@@ -49,12 +49,13 @@ def _ap_model(n):
 
 
 def _neighbor_issues(rec):
-    """CDP/LLDP commands that were not read cleanly: fallback parser, rejected, failed, or output but no neighbours."""
+    """CDP commands that were not read cleanly: fallback parser, rejected, failed, or output but no neighbours.
+    CDP only: the network team asked for CDP problems alone (2026-11-26)."""
     seen = {p for n in rec.get("neighbors") or [] for p in n.get("via") or []}
     out = []
     for c in rec.get("commands") or []:
         purpose, result, lines = c.get("purpose"), c.get("result"), c.get("lines") or 0
-        if purpose not in ("cdp", "lldp"):
+        if purpose != "cdp":
             continue
         if result in ("ok", "fallback") and lines > 3 and purpose not in seen:
             result = "empty"
