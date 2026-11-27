@@ -157,9 +157,16 @@ class Cli(unittest.TestCase):
         with mock.patch("netmon.config.load", return_value=self.cfg), mock.patch("logging.basicConfig"), \
                 mock.patch("logging.FileHandler"), mock.patch("netmon.run.forget_switch", return_value=0) as forget:
             self.assertEqual(cli.main(["forget", "--ip", "10.0.0.2", "--by", "net@somaiya.edu", "--locked"]), 0)
-            forget.assert_called_once_with(self.cfg, "10.0.0.2", "net@somaiya.edu", locked=True)
+            forget.assert_called_once_with(self.cfg, "10.0.0.2", "net@somaiya.edu", locked=True, key=None)
             cli.main(["forget", "--ip", "10.0.0.2"])
-            forget.assert_called_with(self.cfg, "10.0.0.2", "", locked=False)
+            forget.assert_called_with(self.cfg, "10.0.0.2", "", locked=False, key=None)
+            # A switch by its identity key (a replaced switch has no IP left).
+            cli.main(["forget", "--id", "FOC0000TEST", "--by", "net@somaiya.edu", "--locked"])
+            forget.assert_called_with(self.cfg, None, "net@somaiya.edu", locked=True, key="FOC0000TEST")
+            for argv in (["forget"], ["forget", "--ip", "10.0.0.2", "--id", "FOC0000TEST"]):
+                with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+                    cli.main(argv)
+            self.assertEqual(forget.call_count, 3, "exactly one of --ip and --id")
 
     def test_forget_help_names_down_and_ssh_failed(self):
         """R10: the CLI's forget is the same Remove as the dashboard: Down or SSH failed rows."""

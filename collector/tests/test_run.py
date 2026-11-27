@@ -2,9 +2,10 @@ import copy
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-from netmon import config, known, run
+from netmon import config, devices, identity, known, run
 from netmon.store import Store
 from tests.test_build import WLC, campus, nbr, rec
 
@@ -723,6 +724,238 @@ class FullRunOrchestration(unittest.TestCase):
         store = Store(self.tmp.name)
         self.assertEqual(store.read("run-status.json")["state"], "failed")
         self.assertFalse(store.running())
+
+
+MAIN, OTHER, THIRD, DSW = "10.20.0.5", "10.30.0.5", "10.30.0.6", "10.20.0.1"
+SER, OLD, NEW = "FOC0000TEST", "FOC0000OLD", "FOC0000NEW"
+IT0 = "2026-11-01T08:00:00Z"
+
+
+def _ago(hours):
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _fail(ip, error):
+    return {"ip": ip, "ok": False, "error": error, "platform": "", "neighbors": [], "ports": [], "warnings": []}
+
+
+class IdentityRuns(unittest.TestCase):
+    """Full run, Refresh and Remove per switch (identity map, design 7.3 / 7.3a / 7.6)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = config.validate({
+            "collector": {"switch_username": "u", "data_dir": self.tmp.name, "management_ranges": ["10.20.0.0/16"]},
+            "subnets": [{"cidr": "10.20.0.0/24", "sweep": False}, {"cidr": "10.30.0.0/24", "sweep": False}]})
+        self.store = Store(self.tmp.name)
+        self._known(MAIN, OTHER)
+        self.closed, self.replies = set(), {}
+        for target, kw in (("netmon.scan.ssh_banners", {"side_effect": lambda ips, *a, **k: {ip: CISCO for ip in ips}}),
+                           ("netmon.identify.web_hint", {"return_value": ""})):
+            patcher = mock.patch(target, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(known, "MIN_CHECK_GAP_SECONDS", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _known(self, *ips):
+        known.save(self.store, {ip: {"ip": ip, "hostname": "asw-test-01", "uplinks": [], "firstSeen": IT0,
+                                     "lastSeenOk": IT0, "lastSeen": IT0} for ip in ips})
+
+    def _map(self, switches):
+        """Hand-made identity.json; switches: {key: (serials, main, {ip: hours since its last login})}."""
+        ident = {"switches": {}}
+        for key, (serials, main, ips) in switches.items():
+            ident["switches"][key] = {"serials": serials, "main": main, "hostname": "asw-test-01", "firstSeen": IT0,
+                                      "lastRead": IT0, "replacedBy": None,
+                                      "ips": {ip: {"firstSeen": IT0, "lastLogin": _ago(h)} for ip, h in ips.items()}}
+        identity.save(self.store, ident)
+
+    def _ok(self, ip, serials=(SER,), hostname="asw-test-01", neighbors=()):
+        return rec(ip, hostname, "cisco_ios", list(neighbors), serial=serials[0], serials=list(serials))
+
+    def _probe(self, probed):
+        def probe(ips, port=22, *a, **k):
+            ips = list(ips)
+            probed.append(ips)
+            return {ip: (None if ip in self.closed or port != 22 else 1.0) for ip in ips}
+        return probe
+
+    def _patches(self, logins, probed):
+        def login(cfg_, ip, *a):
+            logins.append(ip)
+            return copy.deepcopy(self.replies.get(ip) or self._ok(ip))
+        return (mock.patch("netmon.scan.probe", side_effect=self._probe(probed)),
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u", "p")]),
+                mock.patch("netmon.run._login_collect", side_effect=login))
+
+    def _run(self):
+        logins, probed = [], []
+        p1, p2, p3 = self._patches(logins, probed)
+        with p1, p2, p3:
+            self.assertEqual(run.full_run(self.cfg), 0)
+        return sorted(logins), probed
+
+    def _refresh(self, ip):
+        logins, probed = [], []
+        p1, p2, p3 = self._patches(logins, probed)
+        with p1, p2, p3:
+            code = run.refresh_switch(self.cfg, ip, "net@somaiya.edu")
+        return code, logins
+
+    def _devices(self):
+        return self.store.read("latest.json")["devices"]
+
+    def _progress(self):
+        return {i["ip"]: i for i in self.store.read("run-progress.json")["items"]}
+
+    def test_first_run_logs_in_to_every_ip(self):
+        self.assertIsNone(self.store.read("state", "identity.json"))
+        self.assertEqual(self._run()[0], [MAIN, OTHER], "no identity.json yet: every IP, as before")
+        ident = identity.load(self.store)
+        self.assertEqual(list(ident["switches"]), [SER])
+        self.assertEqual(ident["switches"][SER]["main"], MAIN, "the IP in the management range")
+        self.assertEqual(identity.other_ips(ident, SER), [OTHER])
+        devs = self._devices()
+        self.assertEqual([(d["id"], d["ip"], d["otherIps"]) for d in devs], [(SER, MAIN, [OTHER])])
+
+    def test_other_ip_not_logged_in_until_20h(self):
+        self._run()
+        self.assertEqual(self._run()[0], [MAIN], "an other IP read minutes ago gets no login")
+        item = self._progress()[OTHER]
+        self.assertEqual((item["state"], item["error"]), ("skipped", "Other IP of asw-test-01; re-checked daily"))
+        self.assertEqual(identity.load(self.store)["switches"][SER]["ips"][OTHER].get("lastTry"), None, "not tried")
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 21})})
+        self.assertEqual(self._run()[0], [MAIN, OTHER], "21 h after its last login: the daily re-check")
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 19})})
+        self.assertEqual(self._run()[0], [MAIN], "19 h: not yet")
+
+    def test_fallback_when_main_does_not_answer(self):
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 1})})
+        self.closed = {MAIN}
+        self.assertEqual(self._run()[0], [OTHER], "the switch is still read, on its other IP")
+        self.assertNotEqual(self._progress()[OTHER]["state"], "skipped")
+        devs = [d for d in self._devices() if d["id"] == SER]
+        self.assertEqual(len(devs), 1, "one row for the switch")
+        self.assertEqual(devs[0]["status"], "ok")
+        # identity.update (Task 2; design 7.3 "main candidates are the IPs that logged in this run") makes the IP
+        # that logged in the main, so the row is on that IP with "main IP changed", not on the old main with
+        # ipWarning (see the Task 4 report: the brief expected the latter).
+        self.assertEqual(identity.load(self.store)["switches"][SER]["main"], OTHER)
+        self.assertEqual((devs[0]["ip"], devs[0]["mainIpChanged"]["from"]), (OTHER, MAIN))
+        self.assertNotIn("ipWarning", devs[0])
+
+    def test_timeout_falls_back_but_auth_failure_does_not(self):
+        self._known(MAIN, OTHER, THIRD)
+        for error, want in (("SSH timed out", [MAIN, OTHER]),
+                            ("Login failed with every credential set: set1: SSH timed out", [MAIN, OTHER]),
+                            (devices.AUTH_FAILED, [MAIN]),
+                            ("SSH authentication failed with all 2 credential sets", [MAIN]),
+                            ("Login failed with every credential set: set1: SSH authentication failed; set2: SSH timed out",
+                             [MAIN])):
+            with self.subTest(error=error):
+                self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 1, THIRD: 1})})
+                self.replies = {MAIN: _fail(MAIN, error), OTHER: _fail(OTHER, "SSH timed out")}
+                self.assertEqual(self._run()[0], want, "at most one fallback login per switch; never after an auth failure")
+
+    def test_login_on_other_ip_tries_main_set_first(self):
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 21})})
+        self.store.write({MAIN: "set2"}, "state", "credentials.json")
+        first = {}
+
+        def detect(ip, user, pw, cfg_):
+            first.setdefault(ip, user)
+            return "cisco_ios"
+        with mock.patch("netmon.scan.probe", side_effect=self._probe([])), \
+                mock.patch("netmon.creds.switch_sets", return_value=[("set1", "u1", "p"), ("set2", "u2", "p")]), \
+                mock.patch("netmon.devices.detect_platform", side_effect=detect), \
+                mock.patch("netmon.devices.collect", side_effect=lambda ip, *a, **k: self._ok(ip)):
+            self.assertEqual(run.full_run(self.cfg), 0)
+        self.assertEqual(first, {MAIN: "u2", OTHER: "u2"}, "the switch's working set (main IP's entry) first")
+
+    def test_crawl_skips_known_other_ip(self):
+        self._known(DSW, MAIN, OTHER)
+        self.replies = {DSW: self._ok(DSW, ("FOC0000DSW",), "dsw-test-01", [nbr("Gi1/0/1", "asw-test-01", OTHER, "Gi0/1")])}
+        self._run()
+        logins, probed = self._run()
+        self.assertEqual(logins, [DSW, MAIN])
+        self.assertEqual(sum(ips.count(OTHER) for ips in probed), 1, "only the up/down check of the known IPs")
+        self.assertEqual(self._progress()[OTHER]["state"], "skipped")
+
+    def test_replacement_rechecks_old_other_ips(self):
+        self._map({OLD: ([OLD], MAIN, {MAIN: 1, OTHER: 1})})
+        self.replies = {MAIN: self._ok(MAIN, (NEW,)), OTHER: self._ok(OTHER, (NEW,))}
+        self.assertEqual(self._run()[0], [MAIN, OTHER], "the old switch's other IP is re-checked in the same run")
+        ident = identity.load(self.store)
+        self.assertEqual((identity.owner(ident, MAIN), identity.owner(ident, OTHER)), (NEW, NEW))
+        self.assertEqual((ident["switches"][OLD]["ips"], ident["switches"][OLD]["replacedBy"]), ({}, NEW))
+        old = next(d for d in self._devices() if d["id"] == OLD)
+        self.assertEqual((old["ip"], old["status"]), ("", "down"))
+
+    def test_refresh_uses_main_or_answering_ip(self):
+        self._run()
+        before = identity.load(self.store)["switches"][SER]["ips"][OTHER]["lastLogin"]
+        self.assertEqual(self._refresh(OTHER), (0, [MAIN]), "posted with the other IP: the main is logged in to")
+        self.closed = {MAIN}
+        self.assertEqual(self._refresh(MAIN), (0, [OTHER]), "main closed: its answering other IP")
+        sw = identity.load(self.store)["switches"][SER]
+        self.assertNotEqual(sw["ips"][OTHER]["lastLogin"], before, "identity.json updated by the refresh")
+        status = self.store.read("refresh-status.json")
+        self.assertEqual((status["ok"], status["ip"], status["loginIp"]), (True, MAIN, OTHER))
+        self.assertEqual([d["ip"] for d in self._devices() if d["id"] == SER], [sw["main"]])
+        self.closed = {MAIN, OTHER}
+        self.assertEqual(self._refresh(OTHER), (1, []), "no IP of the switch answers: no login")
+        self.assertEqual(self.store.read("refresh-status.json")["error"], "Still no answer on SSH (tcp/22) from the collector.")
+
+    def test_forget_removes_every_ip(self):
+        self._run()
+        self.assertEqual(run.forget_switch(self.cfg, OTHER, "net@somaiya.edu"), 1, "an Up switch is not removed")
+        self.closed = {MAIN, OTHER}
+        self._run()
+        self._run()
+        dev = next(d for d in self._devices() if d["id"] == SER)
+        self.assertEqual((dev["ip"], dev["status"]), (MAIN, "down"))
+        seeded = dict(self.cfg, collector=dict(self.cfg["collector"], seeds=[OTHER]))
+        self.assertEqual(run.forget_switch(seeded, MAIN, "net@somaiya.edu"), 1, "any IP of the switch is a seed")
+        self.assertIn("core seed", self.store.read("refresh-status.json")["error"])
+        with mock.patch("netmon.run._login_collect", side_effect=AssertionError("no login")), \
+                mock.patch("netmon.scan.probe", side_effect=AssertionError("no probe")):
+            self.assertEqual(run.forget_switch(self.cfg, MAIN, "net@somaiya.edu"), 0)
+        self.assertFalse({MAIN, OTHER} & set(known.load(self.store)))
+        last = self.store.read("state", "last-run.json")
+        self.assertFalse({MAIN, OTHER} & ({r["ip"] for r in last["records"]} | set(last["closed"])))
+        self.assertNotIn(SER, identity.load(self.store)["switches"])
+        self.assertFalse([d for d in self._devices() if d["id"] == SER])
+        self.assertEqual(self.store.read("refresh-status.json")["id"], SER)
+        # A replaced switch (no IPs left) is removed by its key.
+        ident = identity.load(self.store)
+        ident["switches"][OLD] = {"serials": [OLD], "main": None, "hostname": "asw-test-01", "ips": {}, "firstSeen": IT0,
+                                  "lastRead": IT0, "replacedBy": NEW, "last": {"hostname": "asw-test-01", "ip": MAIN}}
+        identity.save(self.store, ident)
+        self.assertEqual(run.forget_switch(self.cfg, key="bad key!"), 1)
+        self.assertEqual(run.forget_switch(self.cfg, key="FOC0000NONE"), 1)
+        self.assertIn(OLD, identity.load(self.store)["switches"])
+        self.assertEqual(run.forget_switch(self.cfg, by="net@somaiya.edu", key=OLD), 0)
+        self.assertNotIn(OLD, identity.load(self.store)["switches"])
+        status = self.store.read("refresh-status.json")
+        self.assertEqual((status["state"], status["id"], status["ip"]), ("done", OLD, ""))
+        with open(self.store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn(f"forget id={OLD} by=net@somaiya.edu", fh.read())
+
+    def test_reach_probes_every_ip_and_skips_replaced_rows(self):
+        self._run()
+        ident = identity.load(self.store)
+        ident["switches"][OLD] = {"serials": [OLD], "main": None, "hostname": "asw-test-09", "ips": {}, "firstSeen": IT0,
+                                  "lastRead": IT0, "replacedBy": SER, "last": {"hostname": "asw-test-09", "ip": "10.20.0.9"}}
+        identity.save(self.store, ident)
+        self._run()
+        self.assertIn("", [d["ip"] for d in self._devices()], "the replaced switch's row")
+        probed = []
+        with mock.patch("netmon.scan.probe", side_effect=self._probe(probed)):
+            self.assertEqual(run.reach_run(self.cfg), 0)
+        self.assertEqual(sorted(probed[0]), [MAIN, OTHER])
 
 
 if __name__ == "__main__":
