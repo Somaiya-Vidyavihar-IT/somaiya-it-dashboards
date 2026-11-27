@@ -103,19 +103,48 @@ class IdentityMap(unittest.TestCase):
         run(ident, [rec("10.30.0.5", [A]), rec("10.30.0.9", [A])])
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.5")
         # ... else the earliest firstSeen, tie: the lowest IP numerically (10.30.0.9 before 10.30.0.10)
+        # (the old main answers tcp/22 here; a main that does not answer is kept: test_silent_main_kept_for_7_days)
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.9": T0, "10.30.0.10": T0}, "10.30.0.5")}}
-        run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.9", [A]), rec("10.30.0.10", [A])])
+        run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.9", [A]), rec("10.30.0.10", [A])],
+            answered={"10.30.0.5"})
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.9")
         # ... firstSeen from the known switches wins over the map's own
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.9": T0, "10.30.0.10": T0}, "10.30.0.5")}}
-        run(ident, [rec("10.30.0.9", [A]), rec("10.30.0.10", [A])], first_seen={"10.30.0.10": "2026-01-01T00:00:00Z"})
+        run(ident, [rec("10.30.0.9", [A]), rec("10.30.0.10", [A])], first_seen={"10.30.0.10": "2026-01-01T00:00:00Z"},
+            answered={"10.30.0.5"})
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.10")
         # (c) an IP whose login failed is not chosen while another logged in; (d) the change is recorded
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.6": T1}, "10.30.0.5")}}
-        logs = run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.6", [A])])
+        logs = run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.6", [A])], answered={"10.30.0.5"})
         sw = ident["switches"][A]
         self.assertEqual((sw["main"], sw["mainChangedFrom"], sw["mainChangedAt"]), ("10.30.0.6", "10.30.0.5", T1))
         self.assertTrue(any("10.30.0.5" in l and "10.30.0.6" in l for l in logs), logs)
+
+    def test_silent_main_kept_for_7_days(self):
+        """Ruling 6: main not answering tcp/22, another IP logs in: the main stays (Up with a warning) until it
+        has not answered for MAIN_SILENT_DAYS; a main that answers but cannot log in still moves."""
+        m, o, t8 = "10.20.0.5", "10.30.0.6", "2026-12-05T08:00:00Z"  # t8: 8 days after T0
+        self.assertEqual(identity.MAIN_SILENT_DAYS, 7)
+        ident = {"switches": {A: switch([A], {m: T0, o: T0}, m)}}
+        run(ident, [rec(o, [A])], now=T1, answered={o})
+        sw = ident["switches"][A]
+        self.assertEqual(sw["main"], m, "silent 1 day (no lastAnswered: its firstSeen counts): kept")
+        self.assertNotIn("mainChangedFrom", sw)
+        self.assertNotIn("lastAnswered", sw["ips"][m], "unchanged: it did not answer")
+        self.assertEqual(sw["ips"][o]["lastAnswered"], T1)
+        run(ident, [rec(o, [A])], now=t8, answered={o})
+        self.assertEqual((sw["main"], sw["mainChangedFrom"], sw["mainChangedAt"]), (o, m, t8), "silent 8 days: moves")
+        # lastAnswered wins over firstSeen: answered 1 day before t8 -> kept, and left as it was
+        ident = {"switches": {A: switch([A], {m: T0, o: T0}, m)}}
+        ident["switches"][A]["ips"][m]["lastAnswered"] = "2026-12-04T08:00:00Z"
+        run(ident, [rec(o, [A])], now=t8, answered={o})
+        self.assertEqual(ident["switches"][A]["main"], m)
+        self.assertEqual(ident["switches"][A]["ips"][m]["lastAnswered"], "2026-12-04T08:00:00Z")
+        # answered tcp/22 but its login failed while the other IP logged in: moves (design 7.3, unchanged)
+        ident = {"switches": {A: switch([A], {m: T0, o: T0}, m)}}
+        run(ident, [rec(m, None, ok=False), rec(o, [A])], now=T1, answered={m, o})
+        self.assertEqual(ident["switches"][A]["main"], o)
+        self.assertEqual(ident["switches"][A]["ips"][m]["lastAnswered"], T1)
 
     def test_replacement_moves_ip(self):
         ident = {"switches": {}}

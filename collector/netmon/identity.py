@@ -3,9 +3,11 @@
 A switch is known by its member serials, not by an address. Every IP whose login returns a serial of a
 known switch is that switch; one of its IPs is the main IP (shown and logged in to), the others get a login
 only for the daily re-check. Entry per switch, keyed by the first real serial seen (never changed):
-{"serials", "main", "hostname", "ips": {ip: {"firstSeen", "lastLogin", "lastTry"}}, "firstSeen", "lastRead",
- "replacedBy", "last": {hostname, model, version, platform, serial; ip once replaced}, "mainChangedFrom",
+{"serials", "main", "hostname", "ips": {ip: {"firstSeen", "lastLogin", "lastTry", "lastAnswered"}}, "firstSeen",
+ "lastRead", "replacedBy", "last": {hostname, model, version, platform, serial; ip once replaced}, "mainChangedFrom",
  "mainChangedAt"}.
+A main IP that does not answer tcp/22 while another IP of the switch does stays main (the switch is "Up with a
+warning", decision 5) until it has not answered for MAIN_SILENT_DAYS; then the main moves to a working IP.
 Pure logic plus load/save; no SSH or network I/O.
 """
 import ipaddress
@@ -17,6 +19,7 @@ from .parse import base_name
 
 FILE = "identity.json"
 RECHECK_HOURS = 20
+MAIN_SILENT_DAYS = 7  # a main IP not answering tcp/22 stays main this long (since its lastAnswered)
 PLACEHOLDERS = frozenset({"UNKNOWN", "NA", "NONE", "NOTAVAILABLE"})
 SERIAL_RE = re.compile(r"[A-Z0-9]{6,}")
 LAST_FIELDS = ("hostname", "model", "version", "platform", "serial")
@@ -232,13 +235,21 @@ def _new_key(switches, serial):
 
 def _choose_main(key, sw, cfg, now, logged_in, answered, first_seen, log):
     """Candidates: IPs that logged in this call, else that answer tcp/22, else all. Inside the management ranges
-    wins; the current main is kept while it qualifies; else the earliest firstSeen, tie: the lowest IP."""
+    wins; the current main is kept while it qualifies; else the earliest firstSeen, tie: the lowest IP.
+
+    The current main is also kept while it did not answer tcp/22 this call but answered (lastAnswered, missing:
+    its firstSeen) less than MAIN_SILENT_DAYS ago: main down, another IP answering is Up with a warning
+    (decision 5). A main that answered but did not log in while another IP did still moves (design 7.3)."""
     ips = sw["ips"]
     cands = [ip for ip in ips if ip in logged_in] or [ip for ip in ips if ip in answered] or list(ips)
     pool = [ip for ip in cands if config_mod.in_management(cfg, ip)] or cands
     old = sw.get("main")
     if old in pool:
         return
+    if old in ips and old not in answered:
+        since, current = _time(ips[old].get("lastAnswered") or ips[old].get("firstSeen")), _time(now)
+        if since and current and (current - since).total_seconds() < MAIN_SILENT_DAYS * 86400:
+            return
 
     def seen(ip):
         fs = first_seen.get(ip) or ips[ip].get("firstSeen")
@@ -254,7 +265,8 @@ def update(ident, records, cfg, now, answered, first_seen):
     """Apply one run's (or one refresh's) login records to the map in place; return plain-English log lines.
 
     Only ok records with real serials create, join, move or merge; any other record of an IP in the map only
-    sets its lastTry. answered: IPs that answered tcp/22 this call; first_seen: known-switches firstSeen per IP.
+    sets its lastTry. answered: IPs that answered tcp/22 this call (their lastAnswered is set); first_seen:
+    known-switches firstSeen per IP.
     """
     switches = ident.setdefault("switches", {})
     first_seen = first_seen or {}
@@ -328,7 +340,11 @@ def update(ident, records, cfg, now, answered, first_seen):
             old["last"] = dict(old.get("last") or {}, ip=last_ip)
             log.append(f"{key} has no IPs left; replaced by {dest} (shown Down until removed)")
 
-    # 4. main IP of every switch read or changed
+    # 4. every IP that answered tcp/22 this call (read or not), then the main IP of every switch read or changed
+    for sw in switches.values():
+        for ip, seen in (sw.get("ips") or {}).items():
+            if ip in answered:
+                seen["lastAnswered"] = now
     for key in sorted(touched):
         _choose_main(key, switches[key], cfg, now, logged_in, answered, first_seen, log)
     return log

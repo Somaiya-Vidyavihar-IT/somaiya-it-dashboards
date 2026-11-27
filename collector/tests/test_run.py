@@ -770,7 +770,8 @@ class IdentityRuns(unittest.TestCase):
         for key, (serials, main, ips) in switches.items():
             ident["switches"][key] = {"serials": serials, "main": main, "hostname": "asw-test-01", "firstSeen": IT0,
                                       "lastRead": IT0, "replacedBy": None,
-                                      "ips": {ip: {"firstSeen": IT0, "lastLogin": _ago(h)} for ip, h in ips.items()}}
+                                      "ips": {ip: {"firstSeen": IT0, "lastLogin": _ago(h), "lastAnswered": _ago(h)}
+                                              for ip, h in ips.items()}}
         identity.save(self.store, ident)
 
     def _ok(self, ip, serials=(SER,), hostname="asw-test-01", neighbors=()):
@@ -840,12 +841,17 @@ class IdentityRuns(unittest.TestCase):
         devs = [d for d in self._devices() if d["id"] == SER]
         self.assertEqual(len(devs), 1, "one row for the switch")
         self.assertEqual(devs[0]["status"], "ok")
-        # identity.update (Task 2; design 7.3 "main candidates are the IPs that logged in this run") makes the IP
-        # that logged in the main, so the row is on that IP with "main IP changed", not on the old main with
-        # ipWarning (see the Task 4 report: the brief expected the latter).
-        self.assertEqual(identity.load(self.store)["switches"][SER]["main"], OTHER)
-        self.assertEqual((devs[0]["ip"], devs[0]["mainIpChanged"]["from"]), (OTHER, MAIN))
-        self.assertNotIn("ipWarning", devs[0])
+        # Main not answering, another IP answering: Up with a warning, the main stays (decision 5, Ruling 6).
+        self.assertEqual(identity.load(self.store)["switches"][SER]["main"], MAIN)
+        self.assertEqual(devs[0]["ip"], MAIN)
+        self.assertEqual(devs[0]["ipWarning"], f"Read on {OTHER}; main IP {MAIN} did not answer")
+        self.assertNotIn("mainIpChanged", devs[0])
+        # Silent for more than MAIN_SILENT_DAYS: the next run moves the main to the IP that works.
+        self._map({SER: ([SER], MAIN, {MAIN: 8 * 24, OTHER: 1})})
+        self.assertEqual(self._run()[0], [OTHER])
+        dev = next(d for d in self._devices() if d["id"] == SER)
+        self.assertEqual((dev["ip"], dev["mainIpChanged"]["from"]), (OTHER, MAIN))
+        self.assertNotIn("ipWarning", dev)
 
     def test_timeout_falls_back_but_auth_failure_does_not(self):
         self._known(MAIN, OTHER, THIRD)
@@ -896,6 +902,7 @@ class IdentityRuns(unittest.TestCase):
 
     def test_refresh_uses_main_or_answering_ip(self):
         self._run()
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 1})})  # last logins an hour ago, so a new one is visible
         before = identity.load(self.store)["switches"][SER]["ips"][OTHER]["lastLogin"]
         self.assertEqual(self._refresh(OTHER), (0, [MAIN]), "posted with the other IP: the main is logged in to")
         self.closed = {MAIN}
@@ -904,7 +911,9 @@ class IdentityRuns(unittest.TestCase):
         self.assertNotEqual(sw["ips"][OTHER]["lastLogin"], before, "identity.json updated by the refresh")
         status = self.store.read("refresh-status.json")
         self.assertEqual((status["ok"], status["ip"], status["loginIp"]), (True, MAIN, OTHER))
-        self.assertEqual([d["ip"] for d in self._devices() if d["id"] == SER], [sw["main"]])
+        self.assertEqual(sw["main"], MAIN, "main silent for an hour: kept (Up with a warning)")
+        dev = next(d for d in self._devices() if d["id"] == SER)
+        self.assertEqual((dev["ip"], dev["ipWarning"]), (MAIN, f"Read on {OTHER}; main IP {MAIN} did not answer"))
         self.closed = {MAIN, OTHER}
         self.assertEqual(self._refresh(OTHER), (1, []), "no IP of the switch answers: no login")
         self.assertEqual(self.store.read("refresh-status.json")["error"], "Still no answer on SSH (tcp/22) from the collector.")

@@ -570,6 +570,11 @@ def refresh_switch(cfg, ip, by="", locked=False):
             records = last["records"] + [rec]  # an other IP the last run did not log in to (daily re-check only)
         else:
             raise RefreshRefused(f"{ip} is no longer in the last full discovery run.")
+        if target != main:
+            # The main did not answer tcp/22: as in a full run, it has no record and is listed as closed, so its
+            # older read does not hide this one (the row stays on the main with ipWarning while the main is kept).
+            records = [r for r in records if r["ip"] != main]
+            last = dict(last, closed=sorted(set(last.get("closed", [])) | {main}))
         store.write(platforms, "state", "platforms.json")
         store.write(cred_of, "state", "credentials.json")
         # Newest map (a full run may have finished meanwhile); joins, moves and the main IP choice as in a full run.
