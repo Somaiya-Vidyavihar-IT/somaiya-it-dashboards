@@ -1,0 +1,1263 @@
+[
+ {
+  "aps": [
+   {
+    "clients": 12,
+    "group": "campus",
+    "institute": "Engineering",
+    "ip": "10.60.0.11",
+    "mac": "20:4c:03:00:00:01",
+    "model": "515",
+    "name": "ap-lib-01",
+    "poeClass": "4",
+    "poeW": 12.4,
+    "port": "Gi1/0/1",
+    "seenBy": [
+     "ap-lldp",
+     "lldp",
+     "wlc"
+    ],
+    "serial": "CNTEST0001",
+    "status": "Up 3d:1h",
+    "switch": "asw-02",
+    "switchIp": "10.0.1.2",
+    "wlc": "10.0.0.5"
+   },
+   {
+    "clients": null,
+    "group": "",
+    "institute": "Engineering",
+    "ip": "",
+    "mac": "20:4c:03:00:00:99",
+    "model": "",
+    "name": "rogue-ap",
+    "poeClass": "",
+    "poeW": null,
+    "port": "Gi1/0/2",
+    "seenBy": [
+     "lldp"
+    ],
+    "serial": "",
+    "status": "Not in WLC",
+    "switch": "asw-02",
+    "switchIp": "10.0.1.2",
+    "wlc": ""
+   },
+   {
+    "clients": null,
+    "group": "campus",
+    "institute": "Unassigned",
+    "ip": "10.60.0.19",
+    "mac": "20:4c:03:00:00:09",
+    "model": "303",
+    "name": "ap-hall-09",
+    "poeClass": "",
+    "poeW": null,
+    "port": "",
+    "seenBy": [
+     "wlc"
+    ],
+    "serial": "CNTEST0009",
+    "status": "Down",
+    "switch": "",
+    "switchIp": "",
+    "wlc": "10.0.0.5"
+   }
+  ],
+  "baseline": {
+   "10.0.0.1#Eth1/10|10.0.1.1#Te1/1/4": {
+    "a": "10.0.0.1",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bPort": "Te1/1/4",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.1#Gi1/0/1|10.0.1.2#Gi1/0/28": {
+    "a": "10.0.1.1",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bPort": "Gi1/0/28",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.2#Gi1/0/3|10.0.1.50#Gi0/1": {
+    "a": "10.0.1.2",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bPort": "Gi0/1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   }
+  },
+  "counters": {
+   "10.0.1.1": {
+    "Gi1/0/1": 10
+   }
+  },
+  "devices": [
+   {
+    "commands": [],
+    "cpu": 5,
+    "credentialSet": "",
+    "depth": 0,
+    "errDelta": null,
+    "error": null,
+    "flags": [],
+    "hostname": "core-01",
+    "institute": "DC",
+    "ip": "10.0.0.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [
+     {
+      "ip": "10.0.1.1",
+      "kind": "switch",
+      "localPort": "Eth1/10",
+      "name": "dsw-01(FDO1)",
+      "peer": "10.0.1.1",
+      "platform": "",
+      "remotePort": "Te1/1/4",
+      "via": [
+       "cdp",
+       "lldp"
+      ]
+     }
+    ],
+    "platform": "cisco_nxos",
+    "poe": null,
+    "ports": {
+     "connected": 1,
+     "errDisabled": 0,
+     "total": 1
+    },
+    "role": "core",
+    "serial": "S-core-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": 92,
+    "credentialSet": "",
+    "depth": 1,
+    "errDelta": null,
+    "error": null,
+    "flags": [
+     "poe",
+     "cpu",
+     "err-disabled"
+    ],
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [
+     {
+      "ip": "10.0.0.1",
+      "kind": "switch",
+      "localPort": "Te1/1/4",
+      "name": "core-01",
+      "peer": "10.0.0.1",
+      "platform": "",
+      "remotePort": "Eth1/10",
+      "via": [
+       "cdp",
+       "lldp"
+      ]
+     },
+     {
+      "ip": "10.0.1.2",
+      "kind": "switch",
+      "localPort": "Gi1/0/1",
+      "name": "asw-02",
+      "peer": "10.0.1.2",
+      "platform": "",
+      "remotePort": "Gi1/0/28",
+      "via": [
+       "lldp"
+      ]
+     }
+    ],
+    "platform": "cisco_ios",
+    "poe": {
+     "availableW": 740.0,
+     "pct": 95,
+     "usedW": 700.0
+    },
+    "ports": {
+     "connected": 2,
+     "errDisabled": 1,
+     "total": 3
+    },
+    "role": "distribution",
+    "serial": "S-dsw-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": 5,
+    "credentialSet": "",
+    "depth": 2,
+    "errDelta": null,
+    "error": null,
+    "flags": [],
+    "hostname": "asw-02",
+    "institute": "Engineering",
+    "ip": "10.0.1.2",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [
+     {
+      "ip": "10.0.1.1",
+      "kind": "switch",
+      "localPort": "Gi1/0/28",
+      "name": "dsw-01",
+      "peer": "10.0.1.1",
+      "platform": "",
+      "remotePort": "Gi1/0/1",
+      "via": [
+       "cdp"
+      ]
+     },
+     {
+      "ip": "10.60.0.11",
+      "kind": "ap",
+      "localPort": "Gi1/0/1",
+      "name": "ap-lib-01",
+      "peer": "",
+      "platform": "",
+      "remotePort": "Eth0",
+      "via": [
+       "lldp"
+      ]
+     },
+     {
+      "ip": "",
+      "kind": "ap",
+      "localPort": "Gi1/0/2",
+      "name": "rogue-ap",
+      "peer": "",
+      "platform": "",
+      "remotePort": "Eth0",
+      "via": [
+       "lldp"
+      ]
+     },
+     {
+      "ip": "10.0.1.50",
+      "kind": "switch",
+      "localPort": "Gi1/0/3",
+      "name": "unknown-sw",
+      "peer": "10.0.1.50",
+      "platform": "",
+      "remotePort": "Gi0/1",
+      "via": [
+       "cdp",
+       "lldp"
+      ]
+     }
+    ],
+    "platform": "cisco_s300",
+    "poe": null,
+    "ports": {
+     "connected": 2,
+     "errDisabled": 0,
+     "total": 2
+    },
+    "role": "access",
+    "serial": "S-asw-02",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": 3,
+    "errDelta": null,
+    "error": "Does not answer SSH (tcp/22) from the collector",
+    "flags": [
+     "no-ssh"
+    ],
+    "hostname": "unknown-sw",
+    "institute": "Engineering",
+    "ip": "10.0.1.50",
+    "loginUser": "",
+    "model": "",
+    "neighbors": [],
+    "platform": "",
+    "poe": null,
+    "ports": null,
+    "role": "access",
+    "seenFrom": [
+     {
+      "hostname": "asw-02",
+      "ip": "10.0.1.2",
+      "port": "Gi1/0/3",
+      "remotePort": "Gi0/1"
+     }
+    ],
+    "serial": "",
+    "status": "no-ssh",
+    "uptime": "",
+    "version": "",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": null,
+    "errDelta": null,
+    "error": "SSH authentication failed",
+    "flags": [
+     "ssh-failed"
+    ],
+    "hostname": "",
+    "institute": "Engineering",
+    "ip": "10.0.1.3",
+    "loginUser": "",
+    "model": "",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "",
+    "poe": null,
+    "ports": null,
+    "removable": true,
+    "role": "unknown",
+    "serial": "",
+    "status": "failed",
+    "uptime": "",
+    "version": "",
+    "warnings": []
+   }
+  ],
+  "findings": [
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "PoE budget 95% used (700.0 of 740.0 W)",
+    "severity": "warning",
+    "type": "poe"
+   },
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "CPU 92% (1-minute average)",
+    "severity": "warning",
+    "type": "cpu"
+   },
+   {
+    "hostname": "",
+    "ip": "10.0.1.3",
+    "message": "SSH collection failed: SSH authentication failed",
+    "severity": "warning",
+    "type": "ssh-failed"
+   },
+   {
+    "hostname": "unknown-sw",
+    "ip": "10.0.1.50",
+    "message": "Switch unknown-sw (10.0.1.50), seen on asw-02 Gi1/0/3, does not answer SSH (tcp/22) from the collector, so it and the switches behind it are not read. Allow SSH from the collector (VTY access list or firewall), then use Reconnect.",
+    "severity": "warning",
+    "type": "no-ssh"
+   },
+   {
+    "hostname": "asw-02",
+    "ip": "10.0.1.2",
+    "message": "AP rogue-ap on Gi1/0/2 is not in any WLC AP database",
+    "severity": "warning",
+    "type": "ap-not-in-wlc"
+   },
+   {
+    "hostname": "",
+    "ip": "",
+    "message": "AP ap-hall-09 is Down on the WLC",
+    "severity": "warning",
+    "type": "ap-down"
+   }
+  ],
+  "institutes": [
+   {
+    "aps": 0,
+    "apsDown": 0,
+    "failed": 0,
+    "name": "DC",
+    "problems": 0,
+    "switches": 1
+   },
+   {
+    "aps": 2,
+    "apsDown": 1,
+    "failed": 2,
+    "name": "Engineering",
+    "problems": 3,
+    "switches": 4
+   },
+   {
+    "aps": 1,
+    "apsDown": 1,
+    "failed": 0,
+    "name": "Unassigned",
+    "problems": 0,
+    "switches": 0
+   }
+  ],
+  "links": [
+   {
+    "a": "10.0.1.2",
+    "aName": "asw-02",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bName": "unknown-sw",
+    "bPort": "Gi0/1",
+    "both": false,
+    "downstream": "10.0.1.50",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "up",
+    "uplink": true,
+    "via": [
+     "cdp",
+     "lldp"
+    ]
+   },
+   {
+    "a": "10.0.0.1",
+    "aName": "core-01",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bName": "dsw-01",
+    "bPort": "Te1/1/4",
+    "both": true,
+    "downstream": "10.0.1.1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "up",
+    "uplink": true,
+    "via": [
+     "cdp",
+     "lldp"
+    ]
+   },
+   {
+    "a": "10.0.1.1",
+    "aName": "dsw-01",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bName": "asw-02",
+    "bPort": "Gi1/0/28",
+    "both": true,
+    "downstream": "10.0.1.2",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "up",
+    "uplink": true,
+    "via": [
+     "cdp",
+     "lldp"
+    ]
+   }
+  ],
+  "problemPorts": [
+   {
+    "detail": "Port is err-disabled",
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "issue": "err-disabled",
+    "neighbor": "",
+    "port": "Gi1/0/9"
+   }
+  ],
+  "summary": {
+   "aps": 3,
+   "apsUp": 1,
+   "collected": 3,
+   "cpuHigh": 1,
+   "down": 0,
+   "failed": 1,
+   "findings": 6,
+   "links": 3,
+   "linksLost": 0,
+   "neighborIssues": 0,
+   "noSsh": 1,
+   "poeHigh": 1,
+   "problemPorts": 1,
+   "switches": 5,
+   "unreachable": 0,
+   "uplinksDown": 0
+  }
+ },
+ {
+  "aps": [
+   {
+    "clients": 12,
+    "group": "campus",
+    "institute": "Engineering",
+    "ip": "10.60.0.11",
+    "mac": "20:4c:03:00:00:01",
+    "model": "515",
+    "name": "ap-lib-01",
+    "poeClass": "",
+    "poeW": null,
+    "port": "Gi1/0/1",
+    "seenBy": [
+     "ap-lldp",
+     "wlc"
+    ],
+    "serial": "CNTEST0001",
+    "status": "Up 3d:1h",
+    "switch": "asw-02",
+    "switchIp": "10.0.1.2",
+    "wlc": "10.0.0.5"
+   },
+   {
+    "clients": null,
+    "group": "campus",
+    "institute": "Unassigned",
+    "ip": "10.60.0.19",
+    "mac": "20:4c:03:00:00:09",
+    "model": "303",
+    "name": "ap-hall-09",
+    "poeClass": "",
+    "poeW": null,
+    "port": "",
+    "seenBy": [
+     "wlc"
+    ],
+    "serial": "CNTEST0009",
+    "status": "Down",
+    "switch": "",
+    "switchIp": "",
+    "wlc": "10.0.0.5"
+   }
+  ],
+  "baseline": {
+   "10.0.0.1#Eth1/10|10.0.1.1#Te1/1/4": {
+    "a": "10.0.0.1",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bPort": "Te1/1/4",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.1#Gi1/0/1|10.0.1.2#Gi1/0/28": {
+    "a": "10.0.1.1",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bPort": "Gi1/0/28",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.2#Gi1/0/3|10.0.1.50#Gi0/1": {
+    "a": "10.0.1.2",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bPort": "Gi0/1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   }
+  },
+  "counters": {
+   "10.0.1.1": {
+    "Gi1/0/1": 400
+   }
+  },
+  "devices": [
+   {
+    "commands": [],
+    "cpu": 5,
+    "credentialSet": "",
+    "depth": 0,
+    "errDelta": null,
+    "error": null,
+    "flags": [],
+    "hostname": "core-01",
+    "institute": "DC",
+    "ip": "10.0.0.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_nxos",
+    "poe": null,
+    "ports": {
+     "connected": 1,
+     "errDisabled": 0,
+     "total": 1
+    },
+    "role": "core",
+    "serial": "S-core-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": null,
+    "errDelta": null,
+    "error": "SSH authentication failed",
+    "flags": [
+     "ssh-failed"
+    ],
+    "hostname": "",
+    "institute": "Engineering",
+    "ip": "10.0.1.3",
+    "loginUser": "",
+    "model": "",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "",
+    "poe": null,
+    "ports": null,
+    "removable": true,
+    "role": "unknown",
+    "serial": "",
+    "status": "failed",
+    "uptime": "",
+    "version": "",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": null,
+    "downSince": "2026-11-05T09:15:00Z",
+    "errDelta": null,
+    "error": "Stopped answering the up/down check (tcp/22) from the collector",
+    "flags": [
+     "down"
+    ],
+    "hostname": "asw-02",
+    "institute": "Engineering",
+    "ip": "10.0.1.2",
+    "lastSeenOk": "2026-11-05T02:30:00Z",
+    "lastUplinks": [
+     {
+      "ip": "10.0.1.1",
+      "localPort": "Gi1/0/28",
+      "name": "dsw-01",
+      "remotePort": "Gi1/0/1"
+     },
+     {
+      "ip": "10.0.1.50",
+      "localPort": "Gi1/0/3",
+      "name": "unknown-sw",
+      "remotePort": "Gi0/1"
+     }
+    ],
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_s300",
+    "poe": null,
+    "ports": null,
+    "role": "access",
+    "serial": "S-asw-02",
+    "status": "down",
+    "uptime": "",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": 92,
+    "credentialSet": "",
+    "depth": null,
+    "errDelta": 390,
+    "error": null,
+    "flags": [
+     "poe",
+     "cpu",
+     "err-disabled",
+     "uplink"
+    ],
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_ios",
+    "poe": {
+     "availableW": 740.0,
+     "pct": 95,
+     "usedW": 700.0
+    },
+    "ports": {
+     "connected": 2,
+     "errDisabled": 1,
+     "total": 3
+    },
+    "role": "unknown",
+    "serial": "S-dsw-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   }
+  ],
+  "findings": [
+   {
+    "hostname": "core-01",
+    "ip": "10.0.0.1",
+    "message": "Link Eth1/10 ↔ Te1/1/4 seen on 2026-11-05T02:30:00Z is missing now",
+    "severity": "critical",
+    "type": "link-lost"
+   },
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "PoE budget 95% used (700.0 of 740.0 W)",
+    "severity": "warning",
+    "type": "poe"
+   },
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "CPU 92% (1-minute average)",
+    "severity": "warning",
+    "type": "cpu"
+   },
+   {
+    "hostname": "",
+    "ip": "10.0.1.3",
+    "message": "SSH collection failed: SSH authentication failed",
+    "severity": "warning",
+    "type": "ssh-failed"
+   },
+   {
+    "hostname": "asw-02",
+    "ip": "10.0.1.2",
+    "message": "Switch asw-02 (10.0.1.2) has missed 2 up/down checks (tcp/22) in a row since 2026-11-05T09:15:00Z; last seen on dsw-01 Gi1/0/1, unknown-sw Gi0/1. Check its power and uplink. If it was taken out of service, Remove it from its details.",
+    "severity": "critical",
+    "type": "down"
+   },
+   {
+    "hostname": "",
+    "ip": "",
+    "message": "AP ap-hall-09 is Down on the WLC",
+    "severity": "warning",
+    "type": "ap-down"
+   }
+  ],
+  "institutes": [
+   {
+    "aps": 0,
+    "apsDown": 0,
+    "failed": 0,
+    "name": "DC",
+    "problems": 0,
+    "switches": 1
+   },
+   {
+    "aps": 1,
+    "apsDown": 0,
+    "failed": 2,
+    "name": "Engineering",
+    "problems": 3,
+    "switches": 3
+   },
+   {
+    "aps": 1,
+    "apsDown": 1,
+    "failed": 0,
+    "name": "Unassigned",
+    "problems": 0,
+    "switches": 0
+   }
+  ],
+  "links": [
+   {
+    "a": "10.0.1.2",
+    "aName": "asw-02",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bName": "",
+    "bPort": "Gi0/1",
+    "both": false,
+    "downstream": "",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "unknown",
+    "uplink": false,
+    "via": []
+   },
+   {
+    "a": "10.0.0.1",
+    "aName": "core-01",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bName": "dsw-01",
+    "bPort": "Te1/1/4",
+    "both": false,
+    "downstream": "10.0.1.1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "lost",
+    "uplink": true,
+    "via": []
+   },
+   {
+    "a": "10.0.1.1",
+    "aName": "dsw-01",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bName": "asw-02",
+    "bPort": "Gi1/0/28",
+    "both": false,
+    "downstream": "",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "unknown",
+    "uplink": false,
+    "via": []
+   }
+  ],
+  "problemPorts": [
+   {
+    "detail": "Port is err-disabled",
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "issue": "err-disabled",
+    "neighbor": "",
+    "port": "Gi1/0/9"
+   },
+   {
+    "detail": "390 receive errors since last run",
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "issue": "errors",
+    "neighbor": "",
+    "port": "Gi1/0/1"
+   },
+   {
+    "detail": "to dsw-01 Te1/1/4",
+    "hostname": "core-01",
+    "institute": "DC",
+    "ip": "10.0.0.1",
+    "issue": "link-lost",
+    "neighbor": "dsw-01",
+    "port": "Eth1/10"
+   }
+  ],
+  "summary": {
+   "aps": 2,
+   "apsUp": 1,
+   "collected": 2,
+   "cpuHigh": 1,
+   "down": 1,
+   "failed": 1,
+   "findings": 6,
+   "links": 0,
+   "linksLost": 1,
+   "neighborIssues": 0,
+   "noSsh": 0,
+   "poeHigh": 1,
+   "problemPorts": 3,
+   "switches": 4,
+   "unreachable": 0,
+   "uplinksDown": 1
+  }
+ },
+ {
+  "aps": [
+   {
+    "clients": 12,
+    "group": "campus",
+    "institute": "Engineering",
+    "ip": "10.60.0.11",
+    "mac": "20:4c:03:00:00:01",
+    "model": "515",
+    "name": "ap-lib-01",
+    "poeClass": "",
+    "poeW": null,
+    "port": "Gi1/0/1",
+    "seenBy": [
+     "ap-lldp",
+     "wlc"
+    ],
+    "serial": "CNTEST0001",
+    "status": "Up 3d:1h",
+    "switch": "asw-02",
+    "switchIp": "10.0.1.2",
+    "wlc": "10.0.0.5"
+   },
+   {
+    "clients": null,
+    "group": "campus",
+    "institute": "Unassigned",
+    "ip": "10.60.0.19",
+    "mac": "20:4c:03:00:00:09",
+    "model": "303",
+    "name": "ap-hall-09",
+    "poeClass": "",
+    "poeW": null,
+    "port": "",
+    "seenBy": [
+     "wlc"
+    ],
+    "serial": "CNTEST0009",
+    "status": "Down",
+    "switch": "",
+    "switchIp": "",
+    "wlc": "10.0.0.5"
+   }
+  ],
+  "baseline": {
+   "10.0.0.1#Eth1/10|10.0.1.1#Te1/1/4": {
+    "a": "10.0.0.1",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bPort": "Te1/1/4",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.1#Gi1/0/1|10.0.1.2#Gi1/0/28": {
+    "a": "10.0.1.1",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bPort": "Gi1/0/28",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   },
+   "10.0.1.2#Gi1/0/3|10.0.1.50#Gi0/1": {
+    "a": "10.0.1.2",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bPort": "Gi0/1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z"
+   }
+  },
+  "counters": {
+   "10.0.1.1": {
+    "Gi1/0/1": 400
+   }
+  },
+  "devices": [
+   {
+    "commands": [],
+    "cpu": 5,
+    "credentialSet": "",
+    "depth": 0,
+    "errDelta": null,
+    "error": null,
+    "flags": [],
+    "hostname": "core-01",
+    "institute": "DC",
+    "ip": "10.0.0.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_nxos",
+    "poe": null,
+    "ports": {
+     "connected": 1,
+     "errDisabled": 0,
+     "total": 1
+    },
+    "role": "core",
+    "serial": "S-core-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": null,
+    "errDelta": null,
+    "error": "SSH authentication failed",
+    "flags": [
+     "ssh-failed"
+    ],
+    "hostname": "",
+    "institute": "Engineering",
+    "ip": "10.0.1.3",
+    "loginUser": "",
+    "model": "",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "",
+    "poe": null,
+    "ports": null,
+    "removable": true,
+    "role": "unknown",
+    "serial": "",
+    "status": "failed",
+    "uptime": "",
+    "version": "",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": null,
+    "credentialSet": "",
+    "depth": null,
+    "downSince": "2026-11-05T09:15:00Z",
+    "errDelta": null,
+    "error": "Did not answer SSH (tcp/22) from the collector on this run",
+    "flags": [
+     "unreachable"
+    ],
+    "hostname": "asw-02",
+    "institute": "Engineering",
+    "ip": "10.0.1.2",
+    "lastSeenOk": "2026-11-05T02:30:00Z",
+    "lastUplinks": [
+     {
+      "ip": "10.0.1.1",
+      "localPort": "Gi1/0/28",
+      "name": "dsw-01",
+      "remotePort": "Gi1/0/1"
+     },
+     {
+      "ip": "10.0.1.50",
+      "localPort": "Gi1/0/3",
+      "name": "unknown-sw",
+      "remotePort": "Gi0/1"
+     }
+    ],
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_s300",
+    "poe": null,
+    "ports": null,
+    "role": "access",
+    "serial": "S-asw-02",
+    "status": "unreachable",
+    "uptime": "",
+    "version": "1",
+    "warnings": []
+   },
+   {
+    "commands": [],
+    "cpu": 92,
+    "credentialSet": "",
+    "depth": null,
+    "errDelta": 390,
+    "error": null,
+    "flags": [
+     "poe",
+     "cpu",
+     "err-disabled",
+     "uplink"
+    ],
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "loginUser": "",
+    "model": "X",
+    "neighborIssues": [],
+    "neighbors": [],
+    "platform": "cisco_ios",
+    "poe": {
+     "availableW": 740.0,
+     "pct": 95,
+     "usedW": 700.0
+    },
+    "ports": {
+     "connected": 2,
+     "errDisabled": 1,
+     "total": 3
+    },
+    "role": "unknown",
+    "serial": "S-dsw-01",
+    "status": "ok",
+    "uptime": "1 day",
+    "version": "1",
+    "warnings": []
+   }
+  ],
+  "findings": [
+   {
+    "hostname": "core-01",
+    "ip": "10.0.0.1",
+    "message": "Link Eth1/10 ↔ Te1/1/4 seen on 2026-11-05T02:30:00Z is missing now",
+    "severity": "critical",
+    "type": "link-lost"
+   },
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "PoE budget 95% used (700.0 of 740.0 W)",
+    "severity": "warning",
+    "type": "poe"
+   },
+   {
+    "hostname": "dsw-01",
+    "ip": "10.0.1.1",
+    "message": "CPU 92% (1-minute average)",
+    "severity": "warning",
+    "type": "cpu"
+   },
+   {
+    "hostname": "",
+    "ip": "10.0.1.3",
+    "message": "SSH collection failed: SSH authentication failed",
+    "severity": "warning",
+    "type": "ssh-failed"
+   },
+   {
+    "hostname": "asw-02",
+    "ip": "10.0.1.2",
+    "message": "Switch asw-02 (10.0.1.2) did not answer SSH (tcp/22) on this run; last seen on dsw-01 Gi1/0/1, unknown-sw Gi0/1. It is shown with its last-known details and becomes Down after 2 missed up/down checks in a row.",
+    "severity": "warning",
+    "type": "unreachable"
+   },
+   {
+    "hostname": "",
+    "ip": "",
+    "message": "AP ap-hall-09 is Down on the WLC",
+    "severity": "warning",
+    "type": "ap-down"
+   }
+  ],
+  "institutes": [
+   {
+    "aps": 0,
+    "apsDown": 0,
+    "failed": 0,
+    "name": "DC",
+    "problems": 0,
+    "switches": 1
+   },
+   {
+    "aps": 1,
+    "apsDown": 0,
+    "failed": 2,
+    "name": "Engineering",
+    "problems": 3,
+    "switches": 3
+   },
+   {
+    "aps": 1,
+    "apsDown": 1,
+    "failed": 0,
+    "name": "Unassigned",
+    "problems": 0,
+    "switches": 0
+   }
+  ],
+  "links": [
+   {
+    "a": "10.0.1.2",
+    "aName": "asw-02",
+    "aPort": "Gi1/0/3",
+    "b": "10.0.1.50",
+    "bName": "",
+    "bPort": "Gi0/1",
+    "both": false,
+    "downstream": "",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "unknown",
+    "uplink": false,
+    "via": []
+   },
+   {
+    "a": "10.0.0.1",
+    "aName": "core-01",
+    "aPort": "Eth1/10",
+    "b": "10.0.1.1",
+    "bName": "dsw-01",
+    "bPort": "Te1/1/4",
+    "both": false,
+    "downstream": "10.0.1.1",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "lost",
+    "uplink": true,
+    "via": []
+   },
+   {
+    "a": "10.0.1.1",
+    "aName": "dsw-01",
+    "aPort": "Gi1/0/1",
+    "b": "10.0.1.2",
+    "bName": "asw-02",
+    "bPort": "Gi1/0/28",
+    "both": false,
+    "downstream": "",
+    "firstSeen": "2026-11-05T02:30:00Z",
+    "lastSeen": "2026-11-05T02:30:00Z",
+    "status": "unknown",
+    "uplink": false,
+    "via": []
+   }
+  ],
+  "problemPorts": [
+   {
+    "detail": "Port is err-disabled",
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "issue": "err-disabled",
+    "neighbor": "",
+    "port": "Gi1/0/9"
+   },
+   {
+    "detail": "390 receive errors since last run",
+    "hostname": "dsw-01",
+    "institute": "Engineering",
+    "ip": "10.0.1.1",
+    "issue": "errors",
+    "neighbor": "",
+    "port": "Gi1/0/1"
+   },
+   {
+    "detail": "to dsw-01 Te1/1/4",
+    "hostname": "core-01",
+    "institute": "DC",
+    "ip": "10.0.0.1",
+    "issue": "link-lost",
+    "neighbor": "dsw-01",
+    "port": "Eth1/10"
+   }
+  ],
+  "summary": {
+   "aps": 2,
+   "apsUp": 1,
+   "collected": 2,
+   "cpuHigh": 1,
+   "down": 0,
+   "failed": 1,
+   "findings": 6,
+   "links": 0,
+   "linksLost": 1,
+   "neighborIssues": 0,
+   "noSsh": 0,
+   "poeHigh": 1,
+   "problemPorts": 3,
+   "switches": 4,
+   "unreachable": 1,
+   "uplinksDown": 1
+  }
+ }
+]

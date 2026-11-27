@@ -1,8 +1,9 @@
+import json
 import os
 import tempfile
 import unittest
 
-from netmon import build, config, reports
+from netmon import build, config, identity, reports
 from netmon.parse import _nbr
 
 CFG = config.validate({
@@ -345,6 +346,188 @@ class DownSwitches(unittest.TestCase):
         self.assertNotIn("10.9.0.1", ips, "out of scope")
         self.assertNotIn("10.0.1.2", ips, "excluded")
         self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0))
+
+
+NEW_DEVICE_FIELDS = ("id", "ips", "otherIps", "serials", "ipWarning", "mainIpChanged", "mainInRange")
+GOLDEN = os.path.join(os.path.dirname(__file__), "data", "build-golden.json")
+
+
+def golden_runs(**extra):
+    """Three builds (first run; next run with a Down switch, a lost uplink and error deltas; one miss only),
+    as JSON, device rows without the identity fields added by the serial-identity work."""
+    from netmon import known
+    out = []
+    snap1, base1, cnt1 = build.build(CFG, campus(), WLC, now="2026-11-05T02:30:00Z",
+                                     ssh_closed=frozenset({"10.0.1.50"}), **extra)
+    out.append((snap1, base1, cnt1))
+    kn = known.update_from_records({}, campus(), snap1["devices"], "2026-11-05T02:30:00Z")
+    for misses in (2, 1):
+        recs = campus(include_uplink=False, errors={"Gi1/0/1": 400})
+        recs[1]["neighbors"] = [n for n in recs[1]["neighbors"] if n["name"] != "asw-02"]
+        recs = [r for r in recs if r["ip"] != "10.0.1.2"]
+        reach = {"10.0.1.2": {"up": False, "since": "2026-11-05T09:15:00Z", "latencyMs": None, "misses": misses}}
+        out.append(build.build(CFG, recs, WLC, base1, cnt1, now="2026-11-05T11:00:00Z",
+                               ssh_closed=frozenset({"10.0.1.2"}), known=kn, reach=reach, **extra))
+    runs = []
+    for snap, base, cnt in out:
+        devices = [{k: v for k, v in d.items() if k not in NEW_DEVICE_FIELDS} for d in snap["devices"]]
+        runs.append({"devices": devices, "links": snap["links"], "findings": snap["findings"],
+                     "summary": snap["summary"], "institutes": snap["institutes"], "aps": snap["aps"],
+                     "problemPorts": snap["problemPorts"], "baseline": base, "counters": cnt})
+    return json.loads(json.dumps(runs, sort_keys=True))
+
+
+ICFG = config.validate({
+    "collector": {"switch_username": "<USER>", "keep_days": 30, "management_ranges": ["10.20.0.0/16"]},
+    "subnets": [{"cidr": "10.20.0.0/16", "institute": "Engineering"}, {"cidr": "10.30.0.0/16", "institute": "Hostel"},
+                {"cidr": "10.10.0.0/16", "institute": "DC"}],
+})
+IT0, IT1 = "2026-11-27T08:00:00Z", "2026-11-28T08:00:00Z"
+
+
+def irec(ip, serials, neighbors=(), ok=True, **kw):
+    r = rec(ip, "asw-test-05", "cisco_ios", list(neighbors), [("Gi1/0/1", "connected"), ("Te1/1/1", "connected")], **kw)
+    r["serials"] = serials
+    r["serial"] = (serials or [""])[0]
+    if not ok:
+        r.update(ok=False, error="SSH connection timed out", hostname="", neighbors=[], ports=[])
+    return r
+
+
+def one_switch_map():
+    """FOC0000TEST answers on 10.20.0.5 (main, management range) and 10.30.0.5, as Task 2 builds it."""
+    ident = {"switches": {}}
+    identity.update(ident, [irec("10.30.0.5", ["FOC0000TEST"]), irec("10.20.0.5", ["FOC0000TEST"])], ICFG, IT0, set(), {})
+    return ident
+
+
+class SerialIdentity(unittest.TestCase):
+    """One switch = one serial set: build lists one row per switch (design 7.4, 7.5)."""
+
+    def dist(self, advertised_ip):
+        return rec("10.10.0.1", "dsw-test-01", "cisco_ios", [nbr("Te1/0/1", "asw-test-05", advertised_ip, "Te1/1/1")],
+                   [("Te1/0/1", "connected")], serials=["FOC0000DIST"])
+
+    def test_one_row_per_switch(self):
+        ident = one_switch_map()
+        recs = [irec("10.30.0.5", ["FOC0000TEST"]), irec("10.20.0.5", ["FOC0000TEST"])]
+        snap, _, _ = build.build(ICFG, recs, [], now=IT1, identity=ident)
+        self.assertEqual(len(snap["devices"]), 1, snap["devices"])
+        d = snap["devices"][0]
+        self.assertEqual((d["ip"], d["id"], d["ips"], d["otherIps"], d["serials"]),
+                         ("10.20.0.5", "FOC0000TEST", ["10.20.0.5", "10.30.0.5"], ["10.30.0.5"], ["FOC0000TEST"]))
+        self.assertIs(d["mainInRange"], True)
+        self.assertNotIn("ipWarning", d)
+        self.assertNotIn("mainIpChanged", d)
+        self.assertEqual((snap["summary"]["switches"], snap["summary"]["collected"]), (1, 1))
+
+    def test_read_on_other_ip_when_main_failed(self):
+        ident = one_switch_map()
+        ident["switches"]["FOC0000TEST"].update(mainChangedFrom="10.30.0.5", mainChangedAt=IT0)
+        recs = [irec("10.20.0.5", None, ok=False), irec("10.30.0.5", ["FOC0000TEST"])]
+        snap, _, _ = build.build(ICFG, recs, [], now=IT1, identity=ident)
+        self.assertEqual(len(snap["devices"]), 1, snap["devices"])
+        d = snap["devices"][0]
+        self.assertEqual((d["ip"], d["status"], d["hostname"]), ("10.20.0.5", "ok", "asw-test-05"))
+        self.assertEqual(d["ipWarning"], "Read on 10.30.0.5; main IP 10.20.0.5 did not answer")
+        self.assertEqual(d["mainIpChanged"], {"from": "10.30.0.5", "at": IT0})
+        self.assertFalse([f for f in snap["findings"] if f["type"] == "ssh-failed"], "the failed main is folded in")
+
+    def test_neighbour_on_other_ip_resolves_to_main(self):
+        ident = one_switch_map()
+        recs = [self.dist("10.30.0.5"), irec("10.20.0.5", ["FOC0000TEST"])]
+        snap, _, _ = build.build(ICFG, recs, [], now=IT1, identity=ident, ssh_closed=frozenset({"10.30.0.5"}))
+        links = [l for l in snap["links"] if l["status"] == "up"]
+        self.assertEqual([(l["a"], l["b"]) for l in links], [("10.10.0.1", "10.20.0.5")])
+        dist = next(d for d in snap["devices"] if d["ip"] == "10.10.0.1")
+        self.assertEqual(dist["neighbors"][0]["peer"], "10.20.0.5")
+        self.assertEqual(sorted(d["ip"] for d in snap["devices"]), ["10.10.0.1", "10.20.0.5"], "no no-ssh row for 10.30.0.5")
+
+    def test_neighbour_on_other_ip_of_unread_switch_is_one_row(self):
+        """The switch has no record; its other IP does not answer SSH: one no-ssh row, on the main IP."""
+        ident = one_switch_map()
+        snap, _, _ = build.build(ICFG, [self.dist("10.30.0.5")], [], now=IT1, identity=ident,
+                                 ssh_closed=frozenset({"10.30.0.5"}))
+        rows = [d for d in snap["devices"] if d["ip"] != "10.10.0.1"]
+        self.assertEqual([(d["ip"], d["status"], d["id"], d["otherIps"]) for d in rows],
+                         [("10.20.0.5", "no-ssh", "FOC0000TEST", ["10.30.0.5"])])
+
+    def test_main_ip_change_raises_no_lost_link(self):
+        ident = one_switch_map()
+        old_key = "10.10.0.1#Te1/0/1|10.30.0.5#Te1/1/1"
+        baseline = {old_key: {"a": "10.10.0.1", "aPort": "Te1/0/1", "b": "10.30.0.5", "bPort": "Te1/1/1",
+                              "firstSeen": IT0, "lastSeen": IT0}}
+        recs = [self.dist("10.20.0.5"), irec("10.20.0.5", ["FOC0000TEST"])]
+        snap, base, _ = build.build(ICFG, recs, [], prev_baseline=baseline, now=IT1, identity=ident)
+        self.assertFalse([f for f in snap["findings"] if f["type"] == "link-lost"], snap["findings"])
+        self.assertEqual(list(base), ["10.10.0.1#Te1/0/1|10.20.0.5#Te1/1/1"])
+        self.assertEqual(base["10.10.0.1#Te1/0/1|10.20.0.5#Te1/1/1"]["firstSeen"], IT0, "history kept")
+        self.assertEqual([l["status"] for l in snap["links"]], ["up"])
+
+    def test_known_other_ips_not_listed_and_warning_status(self):
+        ident = one_switch_map()
+        kn = {ip: {"ip": ip, "hostname": "asw-test-05", "model": "C9200L-TEST", "serial": "FOC0000TEST",
+                   "platform": "cisco_ios", "version": "17.9.4", "uplinks": [], "firstSeen": IT0, "lastSeenOk": IT0}
+              for ip in ("10.20.0.5", "10.30.0.5")}
+        down = {"up": False, "since": IT0, "latencyMs": None, "misses": 3}
+        up = {"up": True, "since": IT0, "latencyMs": 2.0, "misses": 0}
+        snap, _, _ = build.build(ICFG, [], [], now=IT1, identity=ident, known=kn,
+                                 reach={"10.20.0.5": down, "10.30.0.5": up})
+        self.assertEqual(len(snap["devices"]), 1, snap["devices"])
+        d = snap["devices"][0]
+        self.assertEqual((d["ip"], d["status"], d["id"], d["otherIps"]), ("10.20.0.5", "warning", "FOC0000TEST", ["10.30.0.5"]))
+        self.assertEqual(d["error"], "Main IP 10.20.0.5 not answering; answers on 10.30.0.5")
+        self.assertEqual((snap["summary"]["down"], snap["summary"]["unreachable"]), (0, 0))
+        self.assertFalse([f for f in snap["findings"] if f["type"] == "down"])
+        snap, _, _ = build.build(ICFG, [], [], now=IT1, identity=ident, known=kn,
+                                 reach={"10.20.0.5": down, "10.30.0.5": dict(down, misses=1)})
+        self.assertEqual([(d["ip"], d["status"]) for d in snap["devices"]], [("10.20.0.5", "down")])
+        self.assertEqual(snap["summary"]["down"], 1)
+
+    def test_replaced_switch_row(self):
+        ident = {"switches": {}}
+        identity.update(ident, [irec("10.20.0.5", ["FOC0000OLD"])], ICFG, IT0, set(), {})
+        identity.update(ident, [irec("10.20.0.5", ["NEWSER0001"])], ICFG, IT1, set(), {})
+        self.assertEqual(ident["switches"]["FOC0000OLD"]["ips"], {})
+        snap, _, _ = build.build(ICFG, [irec("10.20.0.5", ["NEWSER0001"])], [], now=IT1, identity=ident)
+        rows = {d["id"]: d for d in snap["devices"]}
+        self.assertEqual(sorted(rows), ["FOC0000OLD", "NEWSER0001"])
+        d = rows["FOC0000OLD"]
+        self.assertEqual((d["ip"], d["status"], d["hostname"], d["serial"], d["ips"], d["otherIps"], d["mainInRange"]),
+                         ("", "down", "asw-test-05", "FOC0000OLD", [], [], False))
+        self.assertEqual(d["error"], f"Not seen since {IT0}; its IP 10.20.0.5 now answers as NEWSER0001")
+        self.assertEqual(rows["NEWSER0001"]["ip"], "10.20.0.5")
+        self.assertEqual(snap["summary"]["down"], 1)
+
+    def test_no_identity_is_unchanged(self):
+        with open(GOLDEN, encoding="utf-8") as fh:
+            golden = json.load(fh)
+        self.assertEqual(golden_runs(identity=None), golden)
+        self.assertEqual(golden_runs(identity={"switches": {}}), golden)
+        snap = build.build(CFG, campus(), WLC, now="2026-11-05T02:30:00Z", ssh_closed=frozenset({"10.0.1.50"}))[0]
+        d = {x["ip"]: x for x in snap["devices"]}
+        self.assertEqual((d["10.0.1.1"]["id"], d["10.0.1.1"]["ips"], d["10.0.1.1"]["otherIps"]), ("ip:10.0.1.1", ["10.0.1.1"], []))
+        self.assertEqual((d["10.0.1.50"]["id"], d["10.0.1.50"]["ips"]), ("ip:10.0.1.50", ["10.0.1.50"]))
+        self.assertIs(d["10.0.1.1"]["mainInRange"], False, "no management ranges configured")
+
+    def test_reports_show_other_ips(self):
+        ident = one_switch_map()
+        snap, _, _ = build.build(ICFG, [irec("10.20.0.5", ["FOC0000TEST"])], [], now=IT1, identity=ident)
+        with tempfile.TemporaryDirectory() as tmp:
+            dot = os.path.join(tmp, "t.dot")
+            reports.write_dot(snap, dot)
+            with open(dot, encoding="utf-8") as fh:
+                self.assertIn('"10.20.0.5" [label="asw-test-05\\nX\\n10.20.0.5\\nalso 10.30.0.5"', fh.read())
+            try:
+                import openpyxl
+            except ImportError:
+                self.skipTest("openpyxl not installed")
+            xlsx = os.path.join(tmp, "t.xlsx")
+            reports.write_excel(snap, xlsx)
+            rows = list(openpyxl.load_workbook(xlsx)["Devices"].iter_rows(values_only=True))
+            col = rows[0].index("Other IPs")
+            self.assertEqual(rows[0][col - 1], "Mgmt IP")
+            self.assertEqual(rows[1][col], "10.30.0.5")
 
 
 class Reports(unittest.TestCase):

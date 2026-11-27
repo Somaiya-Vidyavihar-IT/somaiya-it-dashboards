@@ -19,10 +19,10 @@ def write_excel(snapshot, path):
     from openpyxl.styles import Font, PatternFill
 
     sheets = [
-        ("Devices", ["Institute", "Hostname", "Mgmt IP", "Role", "Platform", "Model", "Serial", "OS version",
+        ("Devices", ["Institute", "Hostname", "Mgmt IP", "Other IPs", "Role", "Platform", "Model", "Serial", "OS version",
                      "Uptime", "Status", "Login set", "Login user", "CPU %", "PoE used W", "PoE available W",
                      "Ports connected", "Err-disabled", "Flags", "Error"],
-         [[d["institute"], d["hostname"], d["ip"], d["role"], d["platform"], d["model"], d["serial"], d["version"],
+         [[d["institute"], d["hostname"], d["ip"], d.get("otherIps") or [], d["role"], d["platform"], d["model"], d["serial"], d["version"],
            d["uptime"], d["status"], d.get("credentialSet", ""), d.get("loginUser", ""), d["cpu"], (d["poe"] or {}).get("usedW"), (d["poe"] or {}).get("availableW"),
            (d["ports"] or {}).get("connected"), (d["ports"] or {}).get("errDisabled"), d["flags"], d["error"]]
           for d in snapshot["devices"]]),
@@ -81,8 +81,10 @@ def write_dot(snapshot, path):
         lines.append(f"  subgraph cluster_{i} {{ label={_q(inst)}; color=\"#b7202e\";")
         for d in devs:
             color = "#f7e9ec" if d["status"] != "ok" or d["flags"] else "#ffffff"
-            label = "\\n".join(_clean(v) for v in (d["hostname"] or d["ip"], d["model"], d["ip"]))
-            lines.append(f"    {_q(d['ip'])} [label=\"{label}\", fillcolor=\"{color}\"];")
+            others = ["also " + ", ".join(d["otherIps"])] if d.get("otherIps") else []
+            label = "\\n".join(_clean(v) for v in [d["hostname"] or d["ip"] or d.get("id"), d["model"], d["ip"]] + others)
+            # A replaced switch has no IP; its node is named by its identity key so it does not merge with another.
+            lines.append(f"    {_q(d['ip'] or d.get('id'))} [label=\"{label}\", fillcolor=\"{color}\"];")
         lines.append("  }")
     for l in snapshot["links"]:
         style = {"lost": 'color="#ed1c24", style=dashed', "down": 'color="#ed1c24"', "unknown": 'color="#999999", style=dotted'}.get(l["status"], 'color="#58595b"')

@@ -184,6 +184,39 @@ class IdentityMap(unittest.TestCase):
         self.assertEqual(ident, before)
         self.assertEqual(logs, [])
 
+    def test_fold_one_record_per_switch(self):
+        """main's ok record, else the newest ok record, else main's failed record, else any."""
+        ident = {"switches": {"FOC0000TEST": switch(["FOC0000TEST"], {"10.20.0.5": T0, "10.30.0.5": T0, "10.30.0.6": T1},
+                                                    "10.20.0.5")}}
+        main_ok, main_bad = rec("10.20.0.5", ["FOC0000TEST"]), rec("10.20.0.5", None, ok=False)
+        o1, o2 = rec("10.30.0.5", ["FOC0000TEST"]), dict(rec("10.30.0.6", ["FOC0000TEST"]), refreshedAt=T1)
+        o_bad = rec("10.30.0.5", None, ok=False)
+        unknown = rec("10.30.0.99", ["FOC0000ELSE"])
+        cases = [([o1, main_ok, o2], main_ok), ([main_bad, o1, o2], o2), ([main_bad, o1], o1),
+                 ([o_bad, main_bad], main_bad), ([o_bad], o_bad)]
+        for recs, want in cases:
+            out, alias = identity.fold([unknown] + recs, ident, {})
+            self.assertEqual(len(out), 2)
+            self.assertEqual((out[0]["ip"], out[0]["id"], out[0]["ips"], out[0]["otherIps"], out[0]["serials"]),
+                             ("10.30.0.99", "ip:10.30.0.99", ["10.30.0.99"], [], ["FOC0000ELSE"]))
+            got = out[1]
+            self.assertEqual((got["ip"], got["id"], got["ok"], got["serials"], got["ips"], got["otherIps"]),
+                             ("10.20.0.5", "FOC0000TEST", want["ok"], ["FOC0000TEST"],
+                              ["10.20.0.5", "10.30.0.5", "10.30.0.6"], ["10.30.0.5", "10.30.0.6"]))
+            self.assertEqual(got.get("refreshedAt"), want.get("refreshedAt"))
+            if want["ip"] == "10.20.0.5":
+                self.assertNotIn("ipWarning", got)
+            else:
+                self.assertEqual(got["ipWarning"], f"Read on {want['ip']}; main IP 10.20.0.5 did not answer")
+            self.assertIsNot(got, want, "a copy")
+        self.assertEqual(alias, {"10.20.0.5": "10.20.0.5", "10.30.0.5": "10.20.0.5", "10.30.0.6": "10.20.0.5"})
+        self.assertNotIn("mainIpChanged", out[1])
+        ident["switches"]["FOC0000TEST"].update(mainChangedFrom="10.30.0.5", mainChangedAt=T0)
+        self.assertEqual(identity.fold([main_ok], ident, {})[0][0]["mainIpChanged"], {"from": "10.30.0.5", "at": T0})
+        self.assertEqual(identity.fold([unknown], {"switches": {}}, {}), ([dict(unknown, id="ip:10.30.0.99", ips=["10.30.0.99"],
+                                                                               otherIps=[], serials=["FOC0000ELSE"])], {}))
+        self.assertEqual(identity.fold([], {}, None), ([], {}))
+
     def test_forget(self):
         ident = {"switches": {A: switch([A], {"10.20.0.5": T0}, "10.20.0.5")}}
         self.assertTrue(identity.forget(ident, A))

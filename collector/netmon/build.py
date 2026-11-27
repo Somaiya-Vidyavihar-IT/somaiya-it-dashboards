@@ -4,9 +4,12 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 from . import config as config_mod
+from . import identity as identity_mod
 from .parse import base_name, norm_mac
 
 SCHEMA = 1
+# Identity fields identity.fold puts on a record, copied to its device row (mainInRange is added to every row).
+IDENTITY_FIELDS = ("id", "ips", "otherIps", "serials", "ipWarning", "mainIpChanged")
 # Common Aruba/HPE AP OUIs. Shortcut: partial list, used only when LLDP/CDP text does not say
 # "Aruba"; extend via collector.aruba_ouis in config.toml when an AP model is missed.
 ARUBA_OUIS = {"00:0b:86", "00:1a:1e", "00:24:6c", "04:bd:88", "18:64:72", "20:4c:03", "24:de:c6",
@@ -67,8 +70,13 @@ def _neighbor_issues(rec):
 
 
 def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_info=None, meta=None,
-          ssh_closed=frozenset(), now=None, known=None, reach=None, web_only=None):
+          ssh_closed=frozenset(), now=None, known=None, reach=None, web_only=None, identity=None):
     """Return (snapshot, links_baseline, counters).
+
+    identity: the identity map (identity.load). Records of one switch become one device on its main IP
+    (identity.fold); neighbour IPs, the lost-link baseline and known switches go through the switch's main
+    IP; a known switch answering only on another IP is "warning"; a replaced switch is listed Down with
+    ip "". None or an empty map: one row per IP, as before.
 
     web_only: Cisco hosts the campus IP scan found with a web UI but no SSH ({ip, ports, hint});
     listed as they are (never logged in to), each with its institute. None: no scan produced a list
@@ -83,7 +91,11 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     col = cfg["collector"]
     now = now or iso_now()
     extra_ouis = {norm_mac(o + "000000")[:8] for o in col.get("aruba_ouis", [])}
+    ident = identity or {}
+    records, alias = identity_mod.fold(records, ident, reach or {})
     baseline = {k: dict(v) for k, v in (prev_baseline or {}).items()}
+    if alias:  # a link stored under any IP of a switch is the same link on its main IP (no false "lost")
+        baseline = _alias_baseline(baseline, alias)
     prev_counters = prev_counters or {}
     by_ip = {r["ip"]: r for r in records}
     ok = [r for r in records if r["ok"]]
@@ -97,8 +109,9 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
             mac_idx[r["mac"]] = r["ip"]
 
     def resolve(n):
-        if n["ip"] and n["ip"] in by_ip:
-            return n["ip"]
+        ip = alias.get(n["ip"], n["ip"])
+        if ip and ip in by_ip:
+            return ip
         b = base_name(n["name"])
         if b and b in name_idx:
             return name_idx[b]
@@ -130,7 +143,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
             peer = resolve(n)
             if peer is None and n["kind"] == "switch" and n["ip"] and n["ip"] in ssh_closed \
                     and config_mod.in_scope(cfg, n["ip"]):
-                peer = n["ip"]
+                peer = alias.get(n["ip"], n["ip"])
                 no_ssh.setdefault(peer, []).append((r, n))
             n["peer"] = peer or ""
             if peer is None or peer == r["ip"]:
@@ -230,6 +243,7 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
              "commands": r.get("commands", [])[:80], "neighborIssues": [],
              "credentialSet": r.get("credentialSet", "") if r["ok"] else "",
              "loginUser": user_of.get(r.get("credentialSet"), "") if r["ok"] else ""}
+        d.update({k: r[k] for k in IDENTITY_FIELDS if k in r})
         if r.get("refreshedAt"):  # re-read on its own from the dashboard after the full run
             d.update(refreshedAt=r["refreshedAt"], refreshedBy=r.get("refreshedBy", ""))
         if not r["ok"]:
@@ -293,7 +307,8 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                         "uptime": "", "role": role_of(ip), "depth": depth.get(ip), "status": "no-ssh",
                         "error": "Does not answer SSH (tcp/22) from the collector", "warnings": [], "cpu": None,
                         "poe": None, "ports": None, "errDelta": None, "flags": ["no-ssh"], "neighbors": [],
-                        "commands": [], "credentialSet": "", "loginUser": "", "seenFrom": seen_from})
+                        "commands": [], "credentialSet": "", "loginUser": "", "seenFrom": seen_from,
+                        **identity_mod.row_fields(ident, ip)})
         where = ", ".join(f"{s['hostname'] or s['ip']} {s['port']}" for s in seen_from)
         finding("warning", "no-ssh", f"Switch {name or ip} ({ip}), seen on {where}, does not answer SSH (tcp/22) from "
                 "the collector, so it and the switches behind it are not read. Allow SSH from the collector "
@@ -303,27 +318,39 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     # missed up/down checks in a row, otherwise "unreachable" (Not answering) until the next check.
     reach = reach or {}
     n_down = n_unreach = 0
-    for ip, k in sorted((known or {}).items()):
+    # One entry per switch: every known IP of a switch goes to its main IP, inventory from the main's entry.
+    known_main = {}
+    for ip, k in (known or {}).items():
+        main = alias.get(ip, ip)
+        if ip == main or main not in known_main:
+            known_main[main] = k
+    for ip, k in sorted(known_main.items()):
         # Out of scope or excluded now: not listed (and not probed); the team can still Remove it.
         if ip in by_ip or ip in no_ssh or not config_mod.in_scope(cfg, ip):
             continue
         r = reach.get(ip) or {}
+        ids = identity_mod.row_fields(ident, ip)
+        elsewhere = [] if r.get("up") else [o for o in ids["otherIps"] if (reach.get(o) or {}).get("up")]
         misses = int(r.get("misses") or 0)
-        down = misses >= 2
+        down = misses >= 2 and not elsewhere
+        status = "warning" if elsewhere else "down" if down else "unreachable"
         n_down += down
-        n_unreach += not down
+        n_unreach += status == "unreachable"
         name = k.get("hostname") or ""
         devices.append({"ip": ip, "hostname": name, "institute": institute(ip), "platform": k.get("platform", ""),
                         "model": k.get("model", ""), "serial": k.get("serial", ""), "version": k.get("version", ""),
                         "uptime": "", "role": k.get("role") or "unknown", "depth": None,
-                        "status": "down" if down else "unreachable",
-                        "error": "Stopped answering the up/down check (tcp/22) from the collector" if down
+                        "status": status,
+                        "error": f"Main IP {ip} not answering; answers on {', '.join(elsewhere)}" if elsewhere
+                        else "Stopped answering the up/down check (tcp/22) from the collector" if down
                         else "Did not answer SSH (tcp/22) from the collector on this run",
                         "warnings": [], "cpu": None, "poe": None, "ports": None, "errDelta": None,
-                        "flags": ["down" if down else "unreachable"], "neighbors": [],
+                        "flags": [status], "neighbors": [],
                         "commands": [], "neighborIssues": [], "credentialSet": "", "loginUser": "",
                         "lastUplinks": list(k.get("uplinks") or []), "downSince": r.get("since"),
-                        "lastSeenOk": k.get("lastSeenOk")})
+                        "lastSeenOk": k.get("lastSeenOk"), **ids})
+        if elsewhere:  # Up with a warning: not Down, no finding (design 7.5)
+            continue
         last = ", ".join(f"{u['name'] or u['ip']} {u['remotePort']}".strip() for u in k.get("uplinks") or [])
         seen = f"; last seen on {last}" if last else ""
         if down:
@@ -335,8 +362,29 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
                     "It is shown with its last-known details and becomes Down after 2 missed up/down checks in a row.",
                     ip, name)
 
-    host_of = {d["ip"]: d["hostname"] for d in devices}
-    dev_by_ip = {d["ip"]: d for d in devices}
+    # Replaced switches (identity map entry with no IPs left): Down with their last inventory until removed.
+    for key, sw in sorted((ident.get("switches") or {}).items()):
+        if sw.get("ips"):
+            continue
+        last = sw.get("last") or {}
+        name, old_ip = last.get("hostname") or "", last.get("ip") or ""
+        error = f"Not seen since {sw.get('lastRead')}; its IP {old_ip} now answers as {sw.get('replacedBy')}"
+        n_down += 1
+        devices.append({"ip": "", "hostname": name, "institute": institute(old_ip), "platform": last.get("platform", ""),
+                        "model": last.get("model", ""), "serial": last.get("serial", ""), "version": last.get("version", ""),
+                        "uptime": "", "role": "unknown", "depth": None, "status": "down", "error": error,
+                        "warnings": [], "cpu": None, "poe": None, "ports": None, "errDelta": None, "flags": ["down"],
+                        "neighbors": [], "commands": [], "neighborIssues": [], "credentialSet": "", "loginUser": "",
+                        "lastUplinks": [], "downSince": sw.get("lastRead"), "lastSeenOk": sw.get("lastRead"),
+                        "id": key, "ips": [], "otherIps": [], "serials": list(sw.get("serials") or [])})
+        finding("critical", "down", f"Switch {name or key} (serial {key}): {error}. "
+                "If it was taken out of service, Remove it from its details.", "", name)
+
+    for d in devices:
+        d["mainInRange"] = config_mod.in_management(cfg, d["ip"])
+
+    host_of = {d["ip"]: d["hostname"] for d in devices if d["ip"]}  # a replaced switch has ip ""
+    dev_by_ip = {d["ip"]: d for d in devices if d["ip"]}
     for link in links.values():
         link["aName"], link["bName"] = host_of.get(link["a"], ""), host_of.get(link["b"], "")
         if link["status"] in ("down", "lost"):
@@ -398,9 +446,32 @@ def build(cfg, records, wlcs=(), prev_baseline=None, prev_counters=None, scan_in
     return snapshot, baseline, new_counters
 
 
-def _add_link(links, a, pa, b, pb, via, both):
+def _link_key(a, pa, b, pb):
+    """(key, x, px, y, py): the two ends in sorted order and the baseline/links key built from them."""
     (x, px), (y, py) = sorted([(a, pa), (b, pb)])
-    key = f"{x}#{px}|{y}#{py}"
+    return f"{x}#{px}|{y}#{py}", x, px, y, py
+
+
+def _alias_baseline(baseline, alias):
+    """Baseline links with both ends on main IPs, re-keyed as _add_link keys them. Two entries that become one
+    keep the earliest firstSeen and latest lastSeen; a link between two IPs of the same switch is dropped."""
+    out = {}
+    for old in baseline.values():
+        a, b = alias.get(old["a"], old["a"]), alias.get(old["b"], old["b"])
+        if a == b:
+            continue
+        key, x, px, y, py = _link_key(a, old["aPort"], b, old["bPort"])
+        entry = dict(old, a=x, aPort=px, b=y, bPort=py)
+        cur = out.get(key)
+        if cur:
+            entry["firstSeen"] = min(cur["firstSeen"], entry["firstSeen"])
+            entry["lastSeen"] = max(cur["lastSeen"], entry["lastSeen"])
+        out[key] = entry
+    return out
+
+
+def _add_link(links, a, pa, b, pb, via, both):
+    key, x, px, y, py = _link_key(a, pa, b, pb)
     cur = links.get(key)
     if cur:
         cur["via"] = sorted(set(cur["via"]) | set(via))

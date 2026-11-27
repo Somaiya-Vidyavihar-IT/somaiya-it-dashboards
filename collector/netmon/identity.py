@@ -105,6 +105,64 @@ def replacement_rechecks(ident, rec):
     return [ip for ip in other_ips(ident, key) if ip != rec["ip"]]
 
 
+def row_fields(ident, ip):
+    """Identity fields of a device row for ip: its switch (id = key, ips main first, otherIps, serials,
+    mainIpChanged when the main IP changed), or for an IP no switch owns id "ip:<ip>" and ips [ip]."""
+    key = owner(ident, ip)
+    sw = ident["switches"][key] if key is not None else None
+    if not sw or not sw.get("main"):
+        return {"id": "ip:" + ip, "ips": [ip], "otherIps": [], "serials": []}
+    others = other_ips(ident, key)
+    out = {"id": key, "ips": [sw["main"]] + others, "otherIps": others, "serials": list(sw.get("serials") or [])}
+    if sw.get("mainChangedFrom"):
+        out["mainIpChanged"] = {"from": sw["mainChangedFrom"], "at": sw.get("mainChangedAt")}
+    return out
+
+
+def fold(records, ident, reach=None):
+    """One record per switch, for build. Returns (records, alias {any IP of a switch: its main IP}).
+
+    A switch's records become one copy with ip = the main IP and the row_fields, chosen in this order: the
+    main's ok record, the newest ok record (refreshedAt; tie: main first, then other_ips order), the main's
+    failed record, any. A record read on another IP gets ipWarning. Records of an IP no switch owns pass
+    through (copied) with id "ip:<ip>". reach is accepted for the build call shape; the choice does not use it.
+    """
+    ident = ident or {}
+    switches = ident.get("switches") or {}
+    owners = {ip: key for ip, key in _owners(ident).items() if switches[key].get("main")}
+    alias = {ip: switches[key]["main"] for ip, key in owners.items()}
+    groups, order = {}, []
+    for r in records:
+        key = owners.get(r.get("ip"))
+        if key is None:
+            order.append((None, r))
+        else:
+            if key not in groups:
+                order.append((key, None))
+            groups.setdefault(key, []).append(r)
+    out = []
+    for key, r in order:
+        if key is None:
+            c = dict(r)
+            if r.get("ip"):
+                c.update(row_fields({}, r["ip"]), serials=list(r.get("serials") or []))
+            out.append(c)
+            continue
+        main = switches[key]["main"]
+        rank = {ip: i for i, ip in enumerate([main] + other_ips(ident, key))}
+        recs = groups[key]
+        ok = [x for x in recs if x.get("ok")]
+        chosen = (next((x for x in ok if x["ip"] == main), None)
+                  or (max(ok, key=lambda x: (x.get("refreshedAt") or "", -rank[x["ip"]])) if ok else None)
+                  or next((x for x in recs if x["ip"] == main), None) or recs[0])
+        c = dict(chosen, **row_fields(ident, main))
+        c["ip"] = main
+        if chosen["ip"] != main:
+            c["ipWarning"] = f"Read on {chosen['ip']}; main IP {main} did not answer"
+        out.append(c)
+    return out, alias
+
+
 def forget(ident, key):
     """Remove one switch with all its IPs (dashboard Remove). True if it was in the map."""
     return ident.get("switches", {}).pop(key, None) is not None
