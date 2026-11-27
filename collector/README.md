@@ -93,6 +93,10 @@ Run `fingerprint` once after updating and before trusting the scan. If Nexus, SG
 
 New `[collector]` settings (all optional; defaults shown): `poe_threshold = 75` (percent of PoE budget), `uplink_threshold = 75`, `uplink_fast_minutes = 10`, `uplink_slow_minutes = 30`, `uplink_workers = 16`, `scan_ports = [22, 443, 80]`, `cisco_ssh_banners = ["(?i)cisco"]`, `cisco_web_patterns = ["(?i)cisco"]`. The scan needs the collector host to be allowed tcp 22, 80 and 443 to every subnet with `sweep = true`; allow this before the first run.
 
+### One switch, several IPs
+
+A switch (or stack) that answers on more than one address is listed once. The collector keeps an identity map in `state/identity.json` (serial numbers, the main IP, every other IP seen). The main IP is the one in a `management_ranges` prefix when there is one, otherwise the first one that answered. The other IPs show as `+N` on the Switches row and in the details dialog, and are skipped in a full run ("Skipped (other IP)" on the Discovery tab); they are re-checked once a day in case they belong to a different switch. When the main IP stops answering but another IP does, the switch shows "Up · warning" instead of Down. Remove works on the whole switch (one button, every IP). The identity map can be deleted at any time: the next full run rebuilds it, logging in to every IP as it did before.
+
 ### Credential sets
 
 Switches can use several read-only accounts. `switch_credential_sets` lists them in the order to try. For each switch the collector tries the set that worked last time first, then the others, and remembers the winner in `data\state\credentials.json` (set names only). A switch where every set fails is shown as "SSH authentication failed with all N credential sets". A new switch costs at most N−1 failed logins, once.

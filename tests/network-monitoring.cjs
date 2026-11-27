@@ -305,6 +305,52 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
  // API address not configured yet.
  h=harness('',team);await h.connect();assert.ok(h.el('data-note').textContent.includes('netmonApiBase'));assert.equal(h.el('data-label').textContent,'Campus network API · Not configured');
 
+ // One row per physical switch: other IPs, serials, warning state, replaced switch, old rows without id.
+ {const base=snapshot.devices[0],stack={...base,id:'FOC0000AAAA',ip:'10.20.0.5',ips:['10.20.0.5','10.30.0.5'],otherIps:['10.30.0.5'],serials:['FOC0000AAAA','FOC0000BBBB'],serial:'FOC0000AAAA',hostname:'stack-01',mainInRange:true,mainIpChanged:{from:'10.20.0.9',at:'2026-11-04T10:00:00Z'},flags:[],status:'ok'};
+  const repl={...base,id:'FOC0000CCCC',ip:'',ips:['10.20.0.7'],otherIps:[],serials:['FOC0000CCCC'],hostname:'old-sw',status:'down',flags:['down'],error:'Not seen since 2026-11-01; its IP 10.20.0.7 now answers as stack-02',downSince:'2026-11-01T00:00:00Z',lastSeenOk:'2026-11-01T00:00:00Z',neighbors:[],commands:[],neighborIssues:[]};
+  const old={...base,ip:'10.0.7.7',hostname:'legacy-sw',flags:[],status:'ok'};delete old.id;
+  const snapIdent={...snapshot,summary:{...snapshot.summary,switches:3,down:1},devices:[stack,repl,old],links:[],problemPorts:[],findings:[{severity:'critical',type:'down',ip:'',hostname:'old-sw',message:'old-sw is down'}]};
+  let cur=snapIdent,bump=0;const rt={checkedAt:'2026-11-05T03:00:00Z',results:{'10.20.0.5':{up:true,since:'2026-11-01T00:00:00Z',latencyMs:1,misses:0},'10.30.0.5':{up:true,since:'2026-11-01T00:00:00Z',latencyMs:1,misses:0}}};
+  const stt={run:{state:'idle',lastSuccessAt:snapshot.generatedAt},running:false,reachabilityAt:rt.checkedAt,refresh:{},refreshing:false};
+  const reload=async()=>{rt.checkedAt='2026-11-05T03:0'+(++bump)+':00Z';stt.reachabilityAt=rt.checkedAt;await vm.runInContext('loadAll(true)',g.ctx)};
+  const rr=(p,m)=>p==='/api/v1/me'?{status:200,body:{email:'net@somaiya.edu',canRun:true,apiVersion:4}}:p==='/api/v1/status'?{status:200,body:{...stt}}:p==='/api/v1/snapshot'?{status:200,body:cur}:p==='/api/v1/reachability'?{status:200,body:rt}:p==='/api/v1/forget'&&m==='POST'?{status:202,body:{started:true}}:team(p,m);
+  const g=harness(API,rr);await g.connect();const rows=g.el('sw-rows').innerHTML;
+  assert.ok(rows.includes('10.20.0.5 +1')&&rows.includes('title="Also on 10.30.0.5"'),'Main IP with +N and the others in the title');
+  assert.ok(rows.includes('data-id="FOC0000AAAA"')&&rows.includes('data-id="FOC0000CCCC"')&&rows.includes('data-ip="10.0.7.7"'),'Rows carry data-id, old rows fall back to ip');
+  vm.runInContext("document.getElementById('sw-search').value='10.30.0.5';renderSwitches()",g.ctx);assert.ok(g.el('sw-count').textContent.startsWith('1 of 3')&&g.el('sw-rows').innerHTML.includes('stack-01'),'Search by the other IP');
+  vm.runInContext("document.getElementById('sw-search').value='foc0000bbbb';renderSwitches()",g.ctx);assert.ok(g.el('sw-count').textContent.startsWith('1 of 3'),'Search by the second serial');
+  vm.runInContext("document.getElementById('sw-search').value='';renderSwitches()",g.ctx);
+  vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);{const b=g.el('detail-body').innerHTML;assert.equal(g.el('details').open,true);
+   assert.ok(b.includes('10.20.0.5 (main, management range)')&&b.includes('<b>Also on</b><span>10.30.0.5')&&b.includes('FOC0000AAAA, FOC0000BBBB (stack of 2)')&&b.includes('<b>Main IP changed</b><span>from 10.20.0.9'),b);}
+  stack.mainInRange=false;cur={...snapIdent};await vm.runInContext('loadAll()',g.ctx);vm.runInContext("openDevice('10.30.0.5')",g.ctx);assert.ok(g.el('detail-title').textContent==='stack-01'&&!g.el('detail-body').innerHTML.includes('management range'),'Opens by any of its IPs; no range text unless the device says so');
+  stack.mainInRange=true;
+  vm.runInContext("openDevice('10.0.7.7')",g.ctx);assert.equal(g.el('detail-title').textContent,'legacy-sw','Old rows without id still open');
+  vm.runInContext("openDevice('FOC0000CCCC')",g.ctx);assert.equal(g.el('detail-title').textContent,'old-sw');assert.ok(g.el('detail-body').innerHTML.includes('Down'));assert.equal(g.el('remove-switch').hidden,false,'Replaced row can be removed');
+  assert.equal(g.el('refresh-switch').hidden,true,'Nothing to refresh without a main IP');
+  g.ctx.window.confirm=()=>true;await vm.runInContext('removeSwitch()',g.ctx);assert.equal(g.calls.filter(c=>c.url===API+'/api/v1/forget').pop().body,'{"id":"FOC0000CCCC"}','Replaced row posts id');
+  vm.runInContext("openDevice('10.0.7.7')",g.ctx);
+  vm.runInContext("renderSwitches();renderTopology();renderFindings()",g.ctx);
+  assert.ok(g.el('find-list').innerHTML.includes('old-sw is down'),'A finding without an IP renders');
+  assert.ok(g.el('stats').innerHTML.includes('SWITCHES')&&g.el('stats').innerHTML.includes('<strong>3</strong>'),'Switch counts per row');
+  // A normal switch posts {ip}.
+  const norm={...stack,status:'down',flags:['down'],downSince:'2026-11-05T01:00:00Z'};cur={...snapIdent,devices:[norm,repl,old]};rt.results['10.20.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:3};rt.results['10.30.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:3};
+  await reload();vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);await vm.runInContext('removeSwitch()',g.ctx);assert.equal(g.calls.filter(c=>c.url===API+'/api/v1/forget').pop().body,'{"ip":"10.20.0.5"}','Normal switch posts ip');
+  // Warning: main not answering (2 misses) while another IP is up.
+  cur={...snapIdent,devices:[stack,repl,old]};rt.results['10.20.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:2};rt.results['10.30.0.5']={up:true,since:'2026-11-01T00:00:00Z',latencyMs:1,misses:0};
+  await reload();
+  assert.equal(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Live main down, other IP up: warning');
+  assert.ok(g.el('sw-rows').innerHTML.includes('Up · warning'),'Badge text');
+  assert.ok(g.el('stats').innerHTML.includes('1 answering only on another IP'),'Overview counts warning rows');
+  vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);assert.equal(g.el('remove-switch').hidden,true,'No Remove on a warning row');
+  const wsnap={...stack,status:'warning',error:'Main IP 10.20.0.5 is not answering; 10.30.0.5 is'};cur={...snapIdent,devices:[wsnap,repl,old]};delete rt.results['10.20.0.5'];delete rt.results['10.30.0.5'];
+  await reload();assert.equal(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Snapshot warning');
+  rt.results['10.20.0.5']={up:true,since:'2026-11-05T04:00:00Z',latencyMs:1,misses:0};await reload();assert.notEqual(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Main answers again: no warning');
+  // Discovery: skipped other IPs are not failures.
+  vm.runInContext("progress={startedAt:'a',finishedAt:'b',phase:'done',items:[{ip:'10.30.0.5',kind:'switch',hostname:'',state:'skipped',error:'Other IP of stack-01; re-checked daily',seconds:null,source:'x',at:'2026-11-05T02:21:00Z'}]};renderProgress()",g.ctx);
+  assert.ok(g.el('progress-rows').innerHTML.includes('Skipped (other IP)')&&g.el('progress-summary').textContent.includes('1 skipped')&&g.el('progress-summary').textContent.includes('0 SSH failed'),g.el('progress-summary').textContent);
+  // Sorting key with an empty IP.
+  assert.equal(vm.runInContext("ipKey({ip:''})",g.ctx),'','Empty IP sorts first');assert.equal(vm.runInContext("ipKey({ip:'10.2.3.4'})",g.ctx),'010.002.003.004');}
+
  // Missing Google scopes.
  h=harness(API,team);h.setGrant(false);await h.connect();assert.ok(h.el('data-note').textContent.includes('grant'));assert.equal(h.el('account-email').textContent,'Not signed in');
 
