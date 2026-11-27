@@ -336,15 +336,27 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const norm={...stack,status:'down',flags:['down'],downSince:'2026-11-05T01:00:00Z'};cur={...snapIdent,devices:[norm,repl,old]};rt.results['10.20.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:3};rt.results['10.30.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:3};
   await reload();vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);await vm.runInContext('removeSwitch()',g.ctx);assert.equal(g.calls.filter(c=>c.url===API+'/api/v1/forget').pop().body,'{"ip":"10.20.0.5"}','Normal switch posts ip');
   // Warning: main not answering (2 misses) while another IP is up.
-  cur={...snapIdent,devices:[stack,repl,old]};rt.results['10.20.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:2};rt.results['10.30.0.5']={up:true,since:'2026-11-01T00:00:00Z',latencyMs:1,misses:0};
+  cur={...snapIdent,devices:[stack,repl,old]};rt.results['10.20.0.5']={up:false,since:'2026-11-05T01:00:00Z',latencyMs:null,misses:1};rt.results['10.30.0.5']={up:true,since:'2026-11-01T00:00:00Z',latencyMs:1,misses:0};
   await reload();
   assert.equal(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Live main down, other IP up: warning');
   assert.ok(g.el('sw-rows').innerHTML.includes('Up · warning'),'Badge text');
   assert.ok(g.el('stats').innerHTML.includes('1 answering only on another IP'),'Overview counts warning rows');
   vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);assert.equal(g.el('remove-switch').hidden,true,'No Remove on a warning row');
-  const wsnap={...stack,status:'warning',error:'Main IP 10.20.0.5 is not answering; 10.30.0.5 is'};cur={...snapIdent,devices:[wsnap,repl,old]};delete rt.results['10.20.0.5'];delete rt.results['10.30.0.5'];
-  await reload();assert.equal(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Snapshot warning');
-  rt.results['10.20.0.5']={up:true,since:'2026-11-05T04:00:00Z',latencyMs:1,misses:0};await reload();assert.notEqual(vm.runInContext("stateOf(snap.devices[0])",g.ctx),'warning','Main answers again: no warning');
+  assert.ok(g.el('stats').innerHTML.includes('UNREACHABLE NOW</span><strong>0</strong>'),'A warning switch is not counted as unreachable');
+  assert.ok(g.el('detail-body').innerHTML.includes('<b>Warning</b><span>Main IP 10.20.0.5 not answering; answers on 10.30.0.5</span>'),'Live warning text in the dialog');
+  const stState=()=>vm.runInContext("stateOf(snap.devices[0])",g.ctx);
+  // A snapshot Down row whose other IP answers live is a warning too, and cannot be removed.
+  cur={...snapIdent,devices:[{...stack,status:'down',flags:['down']},repl,old]};await reload();assert.equal(stState(),'warning','Down in the snapshot, other IP answers: warning');
+  vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);assert.equal(g.el('remove-switch').hidden,true,'No Remove while another IP answers');
+  const wsnap={...stack,status:'warning',flags:['warning'],ipWarning:'Main IP 10.20.0.5 did not answer; read on 10.30.0.5',error:'Main IP 10.20.0.5 is not answering; 10.30.0.5 is'};cur={...snapIdent,devices:[wsnap,repl,old]};delete rt.results['10.20.0.5'];delete rt.results['10.30.0.5'];
+  await reload();assert.equal(stState(),'warning','Snapshot warning, no live data');
+  vm.runInContext("openDevice('FOC0000AAAA')",g.ctx);assert.ok(g.el('detail-body').innerHTML.includes('<b>Warning</b><span>Main IP 10.20.0.5 did not answer; read on 10.30.0.5</span>'),'ipWarning shown in the dialog');
+  assert.equal(g.el('remove-switch').hidden,true);
+  rt.results['10.20.0.5']={up:false,since:'2026-11-05T04:00:00Z',latencyMs:null,misses:1};rt.results['10.30.0.5']={up:false,since:'2026-11-05T04:00:00Z',latencyMs:null,misses:1};await reload();assert.equal(stState(),'not-answering','Every IP silent: follows the main IP misses');
+  rt.results['10.20.0.5'].misses=2;await reload();assert.equal(stState(),'down');
+  rt.results['10.20.0.5']={up:true,since:'2026-11-05T04:00:00Z',latencyMs:1,misses:0};await reload();assert.equal(stState(),'answering','Main answers again: answering, read at the next full run');
+  assert.ok(g.el('sw-rows').innerHTML.includes('Answering again')&&!g.el('sw-rows').innerHTML.includes('Needs attention'));
+  assert.ok(vm.runInContext("FLAG_TEXT.warning",g.ctx)==='Main IP not answering');
   // Discovery: skipped other IPs are not failures.
   vm.runInContext("progress={startedAt:'a',finishedAt:'b',phase:'done',items:[{ip:'10.30.0.5',kind:'switch',hostname:'',state:'skipped',error:'Other IP of stack-01; re-checked daily',seconds:null,source:'x',at:'2026-11-05T02:21:00Z'}]};renderProgress()",g.ctx);
   assert.ok(g.el('progress-rows').innerHTML.includes('Skipped (other IP)')&&g.el('progress-summary').textContent.includes('1 skipped')&&g.el('progress-summary').textContent.includes('0 SSH failed'),g.el('progress-summary').textContent);
