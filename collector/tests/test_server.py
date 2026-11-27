@@ -258,6 +258,67 @@ class ApiEndToEnd(unittest.TestCase):
         self.assertIn("forget-request ip=10.0.0.6 by=net@somaiya.edu status=failed", text)
         self.assertIn("forget-request ip=10.9.0.1 by=net@somaiya.edu status=not-listed", text)
 
+    def _two_ip_switch(self, main_reach, other_reach, status="down"):
+        self.store.write({"schema": 1, "devices": [
+            {"id": "FOC0000AAAA", "ip": "10.0.0.2", "ips": ["10.0.0.2", "10.0.1.2"], "otherIps": ["10.0.1.2"],
+             "status": status},
+            {"id": "FOC0000OLD1", "ip": "", "ips": [], "otherIps": [], "status": "down"}]}, "latest.json")
+        self.store.write({"checkedAt": "x", "results": {"10.0.0.2": main_reach, "10.0.1.2": other_reach}},
+                         "reachability.json")
+
+    def test_refresh_accepts_other_ip(self):
+        self.store.write({"records": []}, "state", "last-run.json")
+        self._two_ip_switch({"up": True, "misses": 0}, {"up": True, "misses": 0}, "ok")
+        post = lambda body: self.req("POST", "/api/v1/refresh", "good", body=body)
+        self.assertEqual(post({"ip": "10.0.1.2"})[0].status, 202)
+        self.assertEqual(self.refreshes, [("net@somaiya.edu", "10.0.1.2")])
+        self.store.release("refresh.lock")
+        self.assertEqual(post({"ip": "10.0.9.9"})[0].status, 404)
+
+    def test_forget_refused_when_other_ip_answers(self):
+        post = lambda body: self.req("POST", "/api/v1/forget", "good", body=body)
+        self._two_ip_switch({"up": False, "misses": 3}, {"up": True, "misses": 0})
+        with mock.patch.object(self.httpd, "_spawn") as spawn:
+            resp, body = post({"ip": "10.0.0.2"})
+            self.assertEqual(resp.status, 404)
+            self.assertIn("not listed as Down", json.loads(body)["error"])
+            self.assertEqual(post({"ip": "10.0.1.2"})[0].status, 404, "any IP of the switch gives the same answer")
+            self.assertEqual(post({"id": "FOC0000AAAA"})[0].status, 404)
+        spawn.assert_not_called()
+        self._two_ip_switch({"up": False, "misses": 3}, {"up": False, "misses": 2})
+        with mock.patch.object(self.httpd, "_spawn") as spawn:
+            self.assertEqual(post({"ip": "10.0.1.2"})[0].status, 202, "no IP answers: Down, removable by its other IP")
+        self.assertEqual(spawn.call_args.args[0], ["forget", "--ip", "10.0.1.2", "--by", "net@somaiya.edu", "--locked"])
+        self.store.release("refresh.lock")
+
+    def test_forget_refused_when_any_ip_is_a_seed(self):
+        self._two_ip_switch({"up": False, "misses": 3}, {"up": False, "misses": 3})
+        self.httpd.cfg["collector"]["seeds"] = ["10.0.1.2"]
+        resp, body = self.req("POST", "/api/v1/forget", "good", body={"ip": "10.0.0.2"})
+        self.assertEqual(resp.status, 404)
+        self.assertIn("core seed", json.loads(body)["error"])
+
+    def test_forget_by_id_for_replaced_switch(self):
+        post = lambda body: self.req("POST", "/api/v1/forget", "good", body=body)
+        self._two_ip_switch({"up": True, "misses": 0}, {"up": True, "misses": 0}, "ok")
+        with mock.patch.object(self.httpd, "_spawn") as spawn:
+            resp, body = post({"id": "FOC0000OLD1"})
+            self.assertEqual((resp.status, json.loads(body)), (202, {"started": True, "ip": "FOC0000OLD1"}))
+        self.assertEqual(spawn.call_args.args[0], ["forget", "--id", "FOC0000OLD1", "--by", "net@somaiya.edu", "--locked"])
+        self.store.release("refresh.lock")
+        with open(self.store.path("audit.log"), encoding="utf-8") as fh:
+            self.assertIn("forget-request ip=FOC0000OLD1 by=net@somaiya.edu status=down", fh.read())
+        self.assertEqual(post({"id": "FOC0000NOPE"})[0].status, 404)
+        for bad in ("FOC 0000", "FOC0000;ls", "a/b", "", 5, None):
+            self.assertEqual(post({"id": bad})[0].status, 400, repr(bad))
+        self.assertEqual(post({"id": "FOC0000OLD1", "ip": "10.0.0.2"})[0].status, 400, "exactly one of ip and id")
+
+    def test_forget_old_rows_without_id_or_ips(self):
+        self.store.write({"schema": 1, "devices": [{"ip": "10.0.0.2", "status": "down"}]}, "latest.json")
+        with mock.patch.object(self.httpd, "_spawn"):
+            self.assertEqual(self.req("POST", "/api/v1/forget", "good", body={"id": "ip:10.0.0.2"})[0].status, 202)
+        self.store.release("refresh.lock")
+
     def test_post_bodies_never_leak_into_the_next_request(self):
         """Regression (live): an answer sent before reading the POST body broke the next request on
         the same keep-alive connection, which the page reported as "API unreachable"."""

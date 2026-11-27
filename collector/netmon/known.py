@@ -111,6 +111,25 @@ def forget_refusal(ip, status, reach_entry, known, seeds, in_scope):
     return f"{ip} is not listed as Down or SSH failed; {NOT_REMOVABLE}."
 
 
+def switch_forget_refusal(ips, status, reach, known, seeds, in_scope_of):
+    """forget_refusal for a whole switch (one row, maybe several IPs); shared by run.forget_switch and the API.
+
+    ips: every IP of the switch, main first ([] for a replaced switch, which can always be removed);
+    status: its row's status (None: not listed); reach: reachability.json "results", {ip: entry};
+    in_scope_of: callable ip -> bool. Down only when no IP of the switch answers (the main IP's misses
+    count); refused when any IP of it is a core seed.
+    """
+    if not ips:
+        return None
+    live = reach.get(ips[0])
+    if len(ips) > 1:
+        entries = [reach[i] for i in ips if i in reach]
+        live = {"up": any(e.get("up") for e in entries), "misses": (live or {}).get("misses", 0)} if entries else None
+    seed_set = set(seeds or ())
+    subject = next((i for i in ips if i in seed_set), ips[0])
+    return forget_refusal(subject, status, live, known, seeds, in_scope_of(subject))
+
+
 def _time(value):
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))

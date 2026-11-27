@@ -1,7 +1,6 @@
 """Orchestration: full discovery run (LLD workflow), single-switch refresh and the 15-minute reachability check."""
 import logging
 import os
-import re
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -11,8 +10,7 @@ from . import build, config as config_mod, creds, devices, identify, identity as
 from .store import Store, stamp
 
 log = logging.getLogger("netmon.run")
-# A switch key as forget --id takes it: an identity key (first serial seen) or "ip:<address>".
-KEY_RE = re.compile(r"^[A-Za-z0-9:.\-]+$")
+KEY_RE = identity_mod.KEY_RE  # alias: the key syntax lives in identity.py
 
 
 def full_run(cfg, trigger="scheduled", by=""):
@@ -655,16 +653,8 @@ def forget_switch(cfg, ip=None, by="", locked=False, key=None):
             or next((d for d in rows if d.get("ip") and (d["ip"] in ips or set(d.get("ips") or ()) & set(ips))), None) or {}
         remembered = known_mod.load(store)
         status = row.get("status")
-        refusal = None
-        if ips:
-            seeds = cfg["collector"]["seeds"]
-            reach = _reach_results(store)
-            live = reach.get(ips[0])
-            if len(ips) > 1:  # Down only when no IP of the switch answers; the main IP's misses count
-                entries = [reach[i] for i in ips if i in reach]
-                live = {"up": any(e.get("up") for e in entries), "misses": (live or {}).get("misses", 0)} if entries else None
-            subject = next((i for i in ips if i in set(seeds)), ips[0])  # any IP of it a seed: refused
-            refusal = known_mod.forget_refusal(subject, status, live, remembered, seeds, config_mod.in_scope(cfg, subject))
+        refusal = known_mod.switch_forget_refusal(ips, status, _reach_results(store), remembered,
+                                                  cfg["collector"]["seeds"], lambda i: config_mod.in_scope(cfg, i))
         if refusal:
             raise RefreshRefused(refusal)
         last = store.read("state", "last-run.json", default=None)

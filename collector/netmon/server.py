@@ -22,6 +22,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config as config_mod, known
+from .identity import KEY_RE
 from .store import Store
 
 log = logging.getLogger("netmon.server")
@@ -274,7 +275,7 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.exists(store.path("state", "last-run.json")):
             return self._error(409, "Switch refresh needs one full discovery run with the updated collector first. "
                                     "Use Run discovery now.")
-        if ip not in self.server.known_switches():
+        if ip not in self.server.known_switches():  # any IP of any switch row
             return self._error(404, "This address is not a switch from the last full discovery run.")
         if not store.acquire({"ip": ip, "by": email}, "refresh.lock"):
             busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"
@@ -293,41 +294,64 @@ class Handler(BaseHTTPRequestHandler):
         self._send(202, {"started": True, "ip": ip})
 
     def _forget(self, body):
-        """Remove a Down or SSH-failed switch from the dashboard (Remove). Same lock as a refresh: one at a time."""
+        """Remove a Down or SSH-failed switch from the dashboard (Remove). Same lock as a refresh: one at a time.
+
+        Body {"ip": any IP of the switch} or {"id": the switch's key} (a replaced switch has no IP). The
+        refusal is decided per switch, with the same rule as run.forget_switch (known.switch_forget_refusal).
+        """
         email = self._auth()
         if not email:
             return
         try:
-            ip = str(ipaddress.IPv4Address(str(json.loads(body).get("ip", ""))))
+            posted = json.loads(body)
+            ip, key = posted.get("ip"), posted.get("id")
+            if (ip is None) == (key is None):
+                raise ValueError("exactly one of ip and id")
+            if ip is not None:
+                ip = str(ipaddress.IPv4Address(str(ip))) if isinstance(ip, str) else None
+                if ip is None:
+                    raise ValueError("ip")
+            elif not isinstance(key, str) or not KEY_RE.fullmatch(key):
+                raise ValueError("id")
         except (ValueError, AttributeError, TypeError):
-            return self._error(400, "That is not a valid switch IP address.")
+            return self._error(400, "That is not a valid switch IP address or id.")
         store = self.server.store
         if store.running():
             return self._error(409, "A full discovery run is in progress. Remove the switch when it finishes.")
-        # R7/R8: a row the snapshot lists as Down that the latest up/down check has not seen answer since;
+        server = self.server
+        row = server.switch_row(ip=ip, key=key)
+        if key is not None and row is None:
+            tail = key[3:] if key.startswith("ip:") else ""
+            try:  # a switch without a serial that is not listed (a known one now out of scope): by its IP
+                ip, key = str(ipaddress.IPv4Address(tail)), None
+            except ValueError:
+                return self._error(404, "This id is not a switch from the last full discovery run.")
+        # R7/R8: a row the snapshot lists as Down that no IP of the switch has answered since;
         # R10: or a row whose SSH login fails; or a known switch now out of scope. Never a core seed.
-        live = ((store.read("reachability.json", default={}) or {}).get("results") or {}).get(ip)
-        status = self.server.switch_status(ip)
-        cfg = self.server.cfg
-        refusal = known.forget_refusal(ip, status, live, known.load(store), cfg["collector"]["seeds"],
-                                       config_mod.in_scope(cfg, ip))
+        status = row["status"] if row else None
+        ips = row["ips"] if row else [ip]
+        cfg = server.cfg
+        reach = (store.read("reachability.json", default={}) or {}).get("results") or {}
+        refusal = known.switch_forget_refusal(ips, status, reach, known.load(store), cfg["collector"]["seeds"],
+                                              lambda i: config_mod.in_scope(cfg, i))
         if refusal:
             return self._error(404, refusal)
-        if not store.acquire({"ip": ip, "by": email, "action": "forget"}, "refresh.lock"):
+        who = ip or key  # the audit line and the 202 carry the id where the IP goes
+        if not store.acquire({"ip": who, "by": email, "action": "forget"}, "refresh.lock"):
             busy = (store.read("refresh-status.json", default={}) or {}).get("ip") or "another switch"
             return self._error(409, f"{busy} is being refreshed or removed. Try again when it finishes.")
-        store.write({"action": "forget", "state": "running", "ip": ip, "by": email, "startedAt": None,
+        store.write({"action": "forget", "state": "running", "ip": who, "by": email, "startedAt": None,
                      "finishedAt": None, "ok": None, "error": None}, "refresh-status.json")
         try:
-            self.server.start_forget(email, ip)
+            server.start_forget(email, ip, key) if key else server.start_forget(email, ip)
         except Exception:
             store.release("refresh.lock")
-            store.write({"action": "forget", "state": "failed", "ip": ip, "by": email, "ok": False,
+            store.write({"action": "forget", "state": "failed", "ip": who, "by": email, "ok": False,
                          "error": "The collector could not be started on the server."}, "refresh-status.json")
-            log.exception("Could not start removing %s", ip)
+            log.exception("Could not start removing %s", who)
             return self._error(500, "The collector could not be started on the server.")
-        store.audit(f"forget-request ip={ip} by={email} status={status or 'not-listed'} from={self.client_address[0]}")
-        self._send(202, {"started": True, "ip": ip})
+        store.audit(f"forget-request ip={who} by={email} status={status or 'not-listed'} from={self.client_address[0]}")
+        self._send(202, {"started": True, "ip": who})
 
 
     # ---- CCTV dashboard: own allowlist, data read from SolarWinds by the in-process poller ----
@@ -383,23 +407,42 @@ class NetmonServer(ThreadingHTTPServer):
             cctv = Poller(cfg, self.store)
         self.cctv = cctv  # None: CCTV routes answer 404 "not set up"
 
-    def _statuses(self):
-        """{ip: status} of the switches in latest.json, re-read only when the file changes."""
+    def _index(self):
+        """({ip: row}, {id: row}) of the switches in latest.json, re-read only when the file changes.
+
+        A row is {"id", "ip", "ips", "status"}. Rows from an older collector have no id or ips:
+        ips is [ip] and the id "ip:<ip>". A replaced switch has ips [] (and is found by its id only)."""
         cached = self.files.get(self.store.path("latest.json"))
         if cached is None:
-            return {}
+            return {}, {}
         raw = cached[0]
         if self._known[0] is not raw:
-            self._known = (raw, {d.get("ip"): d.get("status") for d in json.loads(raw).get("devices", [])})
+            by_ip, by_id = {}, {}
+            for d in json.loads(raw).get("devices", []):
+                ip = d.get("ip") or ""
+                ips = [i for i in (d.get("ips") if isinstance(d.get("ips"), list) else None) or ([ip] if ip else [])
+                       if isinstance(i, str)]
+                row = {"id": d.get("id") or ("ip:" + ip if ip else ""), "ip": ip, "ips": ips, "status": d.get("status")}
+                for i in ips:
+                    by_ip[i] = row
+                if row["id"]:
+                    by_id[row["id"]] = row
+            self._known = (raw, (by_ip, by_id))
         return self._known[1]
 
     def known_switches(self):
-        """Switch IPs in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
-        return frozenset(self._statuses())
+        """Every IP of every switch row in latest.json; only these may be refreshed (no logins to arbitrary addresses)."""
+        return frozenset(self._index()[0])
+
+    def switch_row(self, ip=None, key=None):
+        """The row owning an IP (any of its ips) or an id, or None."""
+        by_ip, by_id = self._index()
+        return by_ip.get(ip) if ip is not None else by_id.get(key)
 
     def switch_status(self, ip):
-        """Status of one switch in latest.json ("ok", "failed", "no-ssh", "down"), or None."""
-        return self._statuses().get(ip)
+        """Status of the switch owning this IP in latest.json ("ok", "warning", "failed", "no-ssh", "down"), or None."""
+        row = self.switch_row(ip=ip)
+        return row["status"] if row else None
 
     def finish_request(self, request, client_address):
         # TLS handshake in the worker thread so a slow client cannot stall accept().
@@ -425,8 +468,10 @@ class NetmonServer(ThreadingHTTPServer):
         # --locked: this request already holds refresh.lock; the child releases it when done.
         self._spawn(["refresh", "--ip", ip, "--by", email, "--locked"], "refresh.log")
 
-    def _spawn_forget(self, email, ip):
-        self._spawn(["forget", "--ip", ip, "--by", email, "--locked"], "refresh.log")
+    def _spawn_forget(self, email, ip, key=None):
+        # By id for a switch given by its key (a replaced switch has no IP). Both values were validated by the handler.
+        target = ["--id", key] if key else ["--ip", ip]
+        self._spawn(["forget", *target, "--by", email, "--locked"], "refresh.log")
 
     def _spawn(self, args, log_name):
         python = self.cfg["server"]["python"] or sys.executable

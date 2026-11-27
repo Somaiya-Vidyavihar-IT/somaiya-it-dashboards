@@ -22,6 +22,8 @@ RECHECK_HOURS = 20
 MAIN_SILENT_DAYS = 7  # a main IP not answering tcp/22 stays main this long (since its lastAnswered)
 PLACEHOLDERS = frozenset({"UNKNOWN", "NA", "NONE", "NOTAVAILABLE"})
 SERIAL_RE = re.compile(r"[A-Z0-9]{6,}")
+# A switch key as forget --id and the API take it: an identity key (first serial seen) or "ip:<address>".
+KEY_RE = re.compile(r"^[A-Za-z0-9:.\-]+$")
 LAST_FIELDS = ("hostname", "model", "version", "platform", "serial")
 
 
