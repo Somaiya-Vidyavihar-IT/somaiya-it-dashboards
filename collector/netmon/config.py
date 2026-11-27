@@ -135,6 +135,13 @@ def validate(raw):
         col["exclude_nets"] = [ipaddress.ip_network(x, strict=False) for x in col["exclude"]]
     except ValueError as exc:
         raise ConfigError(f"collector.exclude has an invalid subnet: {exc}")
+    ranges = col.setdefault("management_ranges", [])
+    try:
+        if not isinstance(ranges, list):
+            raise ValueError("expected a list such as [\"10.20.0.0/16\"]")
+        col["management_nets"] = [ipaddress.IPv4Network(x, strict=False) for x in ranges]
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"collector.management_ranges has an invalid IPv4 subnet: {exc}")
     _check_ips(col["seeds"], "collector.seeds (the Nexus core management IPs)")
 
     wlc = dict(raw.get("wlc", {}))
@@ -306,6 +313,15 @@ def subnet_for(cfg, ip):
         if addr in s["net"]:
             return s
     return None
+
+
+def in_management(cfg, ip):
+    """True when ip is inside one of collector.management_ranges (False for none or a non-IPv4 value)."""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return False
+    return any(addr in n for n in cfg["collector"]["management_nets"])
 
 
 def in_scope(cfg, ip):

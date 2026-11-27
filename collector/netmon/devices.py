@@ -135,7 +135,7 @@ def parse_rows(platform, cmd, text, warnings):
 def collect(ip, platform, username, password, cfg, raw_sink=None):
     """Return a normalised device record. Never raises: failures are recorded on the record."""
     rec = {"ip": ip, "ok": False, "error": None, "platform": platform, "warnings": [],
-           "hostname": "", "model": "", "serial": "", "version": "", "uptime": "", "mac": "",
+           "hostname": "", "model": "", "serial": "", "serials": [], "version": "", "uptime": "", "mac": "",
            "cdp": [], "lldp": [], "neighbors": [], "ports": [], "errors": None,
            "poe": None, "poePorts": [], "cpu": None, "commands": []}
     timeout = cfg["collector"]["command_timeout"]

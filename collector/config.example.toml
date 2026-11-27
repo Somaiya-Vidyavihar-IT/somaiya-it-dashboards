@@ -32,7 +32,9 @@ uplink_workers = 16                       # parallel SSH sessions for uplink pol
 # cisco_web_patterns = ["(?i)cisco"]      # regexes matched against the web page to spot Cisco devices
 core_hostname_pattern = ""                # regex; blank = every NX-OS (Nexus) switch is core
 seeds = []                                # extra start IPs, e.g. ["<NEXUS_MGMT_IP>"]
-exclude = []                              # CIDRs never to touch, e.g. ["<CIDR>"]
+# Campus management ranges (the real list lives only on the VM): an IP in here is a switch address.
+# management_ranges = ["10.20.0.0/16"]
+exclude = []                           # CIDRs never to touch, e.g. ["<CIDR>"]
 aruba_ouis = []                           # extra AP OUIs, e.g. ["aa:bb:cc"]
 # IP phones that advertise LLDP "bridge" and look like switches; neighbours with these model names are
 # treated as phones (never crawled or logged in to). Default when omitted: ["X1SG", "X301G", "X3SG"].

@@ -70,10 +70,17 @@ def is_ip(value):
 
 # ---------- identity ----------
 
+def _unique(values):
+    """Non-empty strings, first occurrence only, order kept."""
+    return list(dict.fromkeys(v for v in values if v))
+
+
 def version_ios(rows):
     rows = _up(rows)
     r = rows[0] if rows else {}
+    serials = r.get("SERIAL", [])
     return {
+        "serials": _unique([serials] if isinstance(serials, str) else serials),
         "hostname": r.get("HOSTNAME", ""), "version": r.get("VERSION", ""),
         "model": first(r.get("HARDWARE")), "serial": first(r.get("SERIAL")),
         "uptime": r.get("UPTIME", ""), "mac": norm_mac(first(r.get("MAC_ADDRESS"))),
@@ -85,7 +92,7 @@ def version_nxos(rows):
     r = rows[0] if rows else {}
     return {
         "hostname": r.get("HOSTNAME", ""), "version": r.get("OS", ""),
-        "model": r.get("PLATFORM", ""), "serial": r.get("SERIAL", ""),
+        "model": r.get("PLATFORM", ""), "serial": r.get("SERIAL", ""), "serials": _unique([r.get("SERIAL", "")]),
         "uptime": r.get("UPTIME", "").strip(), "mac": "",
     }
 
@@ -101,15 +108,21 @@ def version_sx(version_rows, system_rows, system_id_rows, version_text="", syste
     grab = lambda pattern, text: (re.search(pattern, text or "", re.M | re.I) or [None, ""])[1].strip()
     desc = grab(r"^\s*System Description:\s*(\S.*?)\s*$", system_text) or s.get("DESCRIPTION", "")
     serial = grab(r"Serial number\s*:\s*(\S+)", system_id_text)
-    if not serial:  # CBS: "Unit   Serial number" header, dashes, then " 1   FOC…"
-        m = re.search(r"Serial number[^\n]*\n\s*-[- ]+\n\s*\d+\s+(\S+)", system_id_text or "", re.I)
-        serial = m.group(1) if m else sid.get("SERIAL_NUMBER", "")
+    serials = [serial] if serial else []
+    if not serial:  # CBS: "Unit   Serial number" header, dashes, then one " 1   FOC…" row per unit
+        m = re.search(r"Serial number[^\n]*\n\s*-[- ]+\n((?:[ \t]*\d+[ \t]+\S+[ \t]*(?:\n|$))+)", system_id_text or "", re.I)
+        if m:
+            serials = [row.split()[1] for row in m.group(1).splitlines() if row.strip()]
+        elif sid.get("SERIAL_NUMBER"):
+            serials = [sid["SERIAL_NUMBER"]]
+        serial = serials[0] if serials else ""
     return {
         # No System Name line on SG500X stack firmware (seen live); devices.collect then uses the prompt.
         "hostname": grab(r"^\s*System Name:\s*(\S+)", system_text) or s.get("HOSTNAME", ""),
         "version": grab(r"SW version\s+(\d+(?:\.\d+)+)", version_text) or grab(r"Version:\s*(\d+(?:\.\d+)+)", version_text)
         or unit_value(version_text, "SW version") or v.get("SW_VERSION", ""),
         "model": unit_value(system_text, "Type") or sx_model_from_description(desc), "serial": serial,
+        "serials": _unique(serials),
         "uptime": grab(r"System Up Time\s*\([^)]*\)\s*:\s*(\S+)", system_text) or unit_value(system_text, "Up time")
         or s.get("UP_TIME", ""),
         "mac": norm_mac(grab(r"System MAC Address:\s*(\S+)", system_text) or s.get("MAC_ADDRESS", "")),

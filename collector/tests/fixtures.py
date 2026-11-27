@@ -785,3 +785,41 @@ Po6         --     --      --      --       --    Not Present
 Po7         --     --      --      --       --    Not Present
 Po8         --     --      --      --       --    Not Present
 """
+
+
+# Two-member IOS stack: "Processor board ID" for the first member, then one "System Serial Number" line per member.
+IOS_SHOW_VERSION_STACK = """Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(7)E8, RELEASE SOFTWARE (fc1)
+
+asw-test-02 uptime is 1 year, 2 weeks, 3 days, 4 hours, 5 minutes
+
+cisco WS-C2960X-48FPD-L (APM86XXX) processor (revision B0) with 524288K bytes of memory.
+Processor board ID FOC0000TEST
+Last reset from power-on
+
+Switch 02
+---------
+Base ethernet MAC Address       : 00:AA:BB:CC:DD:01
+Model number                    : WS-C2960X-48FPD-L
+System Serial Number            : FOC0000TEST
+
+Switch 01
+---------
+Base ethernet MAC Address       : 00:AA:BB:CC:DD:02
+Model number                    : WS-C2960X-48FPD-L
+System Serial Number            : FOC0000TES2
+
+Switch Ports Model                     SW Version            SW Image
+------ ----- -----                     ----------            ----------
+*    1 54    WS-C2960X-48FPD-L         15.2(7)E8             C2960X-UNIVERSALK9-M
+     2 54    WS-C2960X-48FPD-L         15.2(7)E8             C2960X-UNIVERSALK9-M
+
+Configuration register is 0xF
+"""
+
+# ASSUMPTION: layout of a stacked CBS "show system id" (one row per unit); no real stacked sample yet.
+SX_SYSTEM_ID_STACK = """
+       Unit            Serial number
+------------------- -------------------
+         1              FOC0000SX01
+         2              FOC0000SX02
+"""

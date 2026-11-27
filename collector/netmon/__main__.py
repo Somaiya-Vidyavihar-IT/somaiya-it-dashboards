@@ -130,6 +130,13 @@ def main(argv=None):
         from . import creds
         print(f"Config OK: {len(cfg['subnets'])} subnets, {len(cfg['wlc']['hosts'])} WLCs, "
               f"{len(cfg['server']['network_team'])} network-team emails")
+        mgmt = cfg["collector"]["management_nets"]
+        if mgmt:
+            host_bits = [str(n) for raw, n in zip(cfg["collector"]["management_ranges"], mgmt) if str(n) != raw.strip()]
+            note = f" ({len(host_bits)} with host bits, read as {', '.join(host_bits)})" if host_bits else ""
+            print(f"  management ranges: {len(mgmt)}{note}")
+        else:
+            print("  management ranges: none (switches are matched by IP only)")
         missing = 0
         for label, user, stored in creds.status(cfg):
             print(f"  {label:20} user {user or '(none)':20} password {'stored' if stored else 'MISSING'}")

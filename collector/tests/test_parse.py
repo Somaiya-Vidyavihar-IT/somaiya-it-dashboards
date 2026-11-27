@@ -100,6 +100,14 @@ class CustomParsers(unittest.TestCase):
         self.assertEqual((cbs["hostname"], cbs["model"], cbs["version"], cbs["serial"], cbs["mac"], cbs["uptime"]),
                          ("asw-test-cbs", "CBS350-24FP-4G", "3.2.1.1", "FOCTEST0002", "40:14:82:00:00:78", "86,05:32:10"))
 
+    def test_sx_unit_serials(self):
+        stack = parse.version_sx([], [], [], fx.CBS_VERSION, fx.CBS_SYSTEM, fx.SX_SYSTEM_ID_STACK)
+        self.assertEqual(stack["serial"], "FOC0000SX01")
+        self.assertEqual(stack["serials"], ["FOC0000SX01", "FOC0000SX02"])
+        self.assertEqual(parse.version_sx([], [], [], fx.CBS_VERSION, fx.CBS_SYSTEM, fx.CBS_SYSTEM_ID)["serials"], ["FOCTEST0002"])
+        self.assertEqual(parse.version_sx([], [], [], fx.SG300_VERSION, fx.CBS_SYSTEM, fx.SG300_SYSTEM_ID)["serials"], ["DNITEST0001"])
+        self.assertEqual(parse.version_sx([], [], [], "", "", "")["serials"], [])
+
     def test_c1300_model_is_not_catalyst(self):
         """Regression (live, 2026-11-06): C1300 descriptions start with 'Catalyst', so every C1300
         showed model 'Catalyst'. The per-unit Type table wins; otherwise skip the family word."""
@@ -229,6 +237,20 @@ class TextFsmNormalisers(unittest.TestCase):
         self.assertEqual(v["serial"], "FOC0000TEST")
         self.assertEqual(v["version"], "15.2(7)E8")
         self.assertTrue(v["uptime"].startswith("1 year"))
+
+    def test_ios_stack_serials(self):
+        v = parse.version_ios(parse_output(platform="cisco_ios", command="show version", data=fx.IOS_SHOW_VERSION_STACK))
+        self.assertEqual(v["serial"], "FOC0000TEST")
+        self.assertEqual(v["serials"], ["FOC0000TEST", "FOC0000TES2"])
+        single = parse.version_ios(parse_output(platform="cisco_ios", command="show version", data=fx.IOS_VERSION))
+        self.assertEqual(single["serials"], ["FOC0000TEST"])
+        self.assertEqual(parse.version_ios([])["serials"], [])
+
+    def test_nxos_serials(self):
+        v = parse.version_nxos([{"HOSTNAME": "csw-test-01", "OS": "9.3(8)", "PLATFORM": "N9K-C93180YC-FX",
+                                 "SERIAL": "FOC0000NX01", "UPTIME": "1 day"}])
+        self.assertEqual((v["serial"], v["serials"]), ("FOC0000NX01", ["FOC0000NX01"]))
+        self.assertEqual(parse.version_nxos([])["serials"], [])
 
     def test_ios_cdp_template_matches_custom_parser(self):
         rows = parse.cdp_textfsm(parse_output(platform="cisco_ios", command="show cdp neighbors detail", data=fx.IOS_CDP_DETAIL))

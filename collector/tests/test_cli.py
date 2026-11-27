@@ -124,6 +124,31 @@ class Cli(unittest.TestCase):
         self.assertNotIn("CBS350", text.split("Not recognised as Cisco")[1])
         self.assertTrue(any("fingerprint.txt" in l for l in out))
 
+    def _raw(self, **collector):
+        return {"collector": {"switch_username": "u", **collector}, "subnets": [{"cidr": "10.0.0.0/30"}]}
+
+    def test_management_ranges(self):
+        import ipaddress
+        cfg = config.validate(self._raw(management_ranges=["10.20.0.0/16", "10.30.5.9/24"]))
+        col = cfg["collector"]
+        self.assertEqual(col["management_nets"], [ipaddress.ip_network("10.20.0.0/16"), ipaddress.ip_network("10.30.5.0/24")])
+        self.assertTrue(config.in_management(cfg, "10.30.5.200"))
+        self.assertFalse(config.in_management(cfg, "10.40.0.1"))
+        self.assertFalse(config.in_management(cfg, "not-an-ip"))
+        bare = config.validate(self._raw())
+        self.assertEqual((bare["collector"]["management_ranges"], bare["collector"]["management_nets"]), ([], []))
+        self.assertFalse(config.in_management(bare, "10.30.5.200"))
+        with self.assertRaises(config.ConfigError) as ctx:
+            config.validate(self._raw(management_ranges=["bad"]))
+        self.assertIn("collector.management_ranges", str(ctx.exception))
+
+    def test_check_config_reports_management_ranges(self):
+        cfg = config.validate(self._raw(management_ranges=["10.20.0.0/16", "10.30.5.9/24"]))
+        out = []
+        with mock.patch("netmon.config.load", return_value=cfg), mock.patch("logging.basicConfig"),                 mock.patch("logging.FileHandler"), mock.patch("netmon.creds.status", return_value=[]),                 mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+            cli.main(["check-config"])
+        self.assertTrue(any("management ranges: 2 (1 with host bits, read as 10.30.5.0/24)" in l for l in out), out)
+
     def test_store_rejects_unknown_set(self):
         with self.assertRaises(creds.CredentialError):
             creds.store(self.cfg, "switch", "x", "set9")
