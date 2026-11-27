@@ -691,3 +691,97 @@ Port       InUcastPkts  InMcastPkts  InBcastPkts    InOctets
       Po7             0            0            0            0
       Po8             0            0            0            0
 """
+
+# CBS350 'show interfaces status' (live sample, 2026-11-27): speed in Mbps, '--' when down.
+SX_STATUS_CBS350 = """
+Flow Link          Back   Mdix
+Port     Type         Duplex  Speed Neg      ctrl State       Pressure Mode
+-------- ------------ ------  ----- -------- ---- ----------- -------- -------
+gi1      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi2      1G-Copper      --      --     --     --  Down           --     --
+gi3      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi4      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi5      1G-Copper      --      --     --     --  Down           --     --
+gi6      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi7      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi8      1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi9      1G-Copper      --      --     --     --  Down           --     --
+gi10     1G-Copper      --      --     --     --  Down           --     --
+gi11     1G-Copper      --      --     --     --  Down           --     --
+gi12     1G-Copper      --      --     --     --  Down           --     --
+gi13     1G-Copper    Full    1000  Enabled  Off  Up          Disabled Off
+gi14     1G-Copper      --      --     --     --  Down           --     --
+gi15     1G-Copper    Full    1000  Enabled  Off  Up          Disabled Off
+gi16     1G-Copper      --      --     --     --  Down           --     --
+gi17     1G-Copper      --      --     --     --  Down           --     --
+gi18     1G-Copper      --      --     --     --  Down           --     --
+gi19     1G-Copper      --      --     --     --  Down           --     --
+gi20     1G-Copper      --      --     --     --  Down           --     --
+gi21     1G-Copper      --      --     --     --  Down           --     --
+gi22     1G-Copper      --      --     --     --  Down           --     --
+gi23     1G-Copper      --      --     --     --  Down           --     --
+gi24     1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi25     1G-Fiber       --      --     --     --  Down           --     --
+gi26     1G-Fiber       --      --     --     --  Down           --     --
+gi27     1G-Fiber       --      --     --     --  Down           --     --
+gi28     1G-Fiber       --      --     --     --  Down           --     --
+
+                                          Flow    Link
+Ch       Type    Duplex  Speed  Neg      control  State
+-------- ------- ------  -----  -------- -------  -----------
+Po1         --     --      --      --       --    Not Present
+Po2         --     --      --      --       --    Not Present
+Po3         --     --      --      --       --    Not Present
+Po4         --     --      --      --       --    Not Present
+Po5         --     --      --      --       --    Not Present
+Po6         --     --      --      --       --    Not Present
+Po7         --     --      --      --       --    Not Present
+Po8         --     --      --      --       --    Not Present
+"""
+
+# C1300 'show interfaces status' (live sample, 2026-11-27): 100/1000/10000 Mbps.
+SX_STATUS_C1300 = """
+Flow Link          Back   Mdix
+Port      Type         Duplex  Speed Neg      ctrl State       Pressure Mode
+--------- ------------ ------  ----- -------- ---- ----------- -------- -------
+gi1/0/1   1G-Copper    Full    1000  Enabled  Off  Up          Disabled Off
+gi1/0/2   1G-Copper      --      --     --     --  Down           --     --
+gi1/0/3   1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/4   1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/5   1G-Copper      --      --     --     --  Down           --     --
+gi1/0/6   1G-Copper      --      --     --     --  Down           --     --
+gi1/0/7   1G-Copper      --      --     --     --  Down           --     --
+gi1/0/8   1G-Copper      --      --     --     --  Down           --     --
+gi1/0/9   1G-Copper    Full    100   Enabled  Off  Up          Disabled On
+gi1/0/10  1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/11  1G-Copper    Full    100   Enabled  Off  Up          Disabled On
+gi1/0/12  1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/13  1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/14  1G-Copper    Full    100   Enabled  Off  Up          Disabled Off
+gi1/0/15  1G-Copper    Full    100   Enabled  Off  Up          Disabled On
+gi1/0/16  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/17  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/18  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/19  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/20  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/21  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/22  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/23  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/24  1G-Copper      --      --     --     --  Down           --     --
+te1/0/1   10G-Fiber    Full    10000 Disabled Off  Up          Disabled Off
+te1/0/2   10G-Fiber    Full    10000 Disabled Off  Up          Disabled Off
+te1/0/3   10G-Fiber    Full    10000 Disabled Off  Up          Disabled Off
+te1/0/4   10G-Fiber      --      --     --     --  Down           --     --
+
+                                          Flow    Link
+Ch       Type    Duplex  Speed  Neg      control  State
+-------- ------- ------  -----  -------- -------  -----------
+Po1         --     --      --      --       --    Not Present
+Po2         --     --      --      --       --    Not Present
+Po3         --     --      --      --       --    Not Present
+Po4         --     --      --      --       --    Not Present
+Po5         --     --      --      --       --    Not Present
+Po6         --     --      --      --       --    Not Present
+Po7         --     --      --      --       --    Not Present
+Po8         --     --      --      --       --    Not Present
+"""

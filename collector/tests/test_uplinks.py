@@ -210,17 +210,65 @@ class Poll(unittest.TestCase):
         self.assertEqual(conn.sent, ["show port-channel summary", "show interface Po10", "show interface Eth1/49",
                                      "show interface Eth1/50"])
 
-    def test_sx_ports_not_read_yet(self):
-        asw = dev("10.0.1.5", "access", "cisco_s300", [nb("Gi49", "dsw-test-01", "10.0.1.1", peer="10.0.1.1"),
-                                                       nb("Gi50", "aruba-test", "10.0.1.9", platform="Aruba 2930F")])
+    def sx_poll(self, second_counters, status=fx.SX_STATUS_CBS350):
+        """One round with an SG/CBS switch whose counters read fx.SX_COUNTERS_CBS350, then second_counters."""
+        asw = dev("10.0.1.5", "access", "cisco_s300", [
+            nb("Gi24", "dsw-test-01", "10.0.1.1", peer="10.0.1.1"),           # uplink, up at 1000 Mbps
+            nb("Gi2", "asw-test-09", "10.0.1.9", platform="Cisco CBS350"),     # port down: no speed
+            nb("Gi49", "asw-test-10", "10.0.1.10", platform="Cisco CBS350"),   # not in the counters
+            nb("Gi50", "aruba-test", "10.0.1.11", platform="Aruba 2930F")])     # not Cisco: not an uplink
         dsw = dev("10.0.1.1", "distribution", "cisco_ios", [])
         self.snapshot([asw, dsw], platforms={"10.0.1.5": "cisco_s300"})
-        code, data = self.poll()
+        readings = iter([fx.SX_COUNTERS_CBS350, second_counters])
+        conn = self.conns["10.0.1.5"] = FakeConn(lambda cmd: status if cmd == "show interfaces status"
+                                                 else next(readings) if cmd == "show interfaces counters" else None)
+        now, slept = [100.0], []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+
+        with mock.patch("netmon.uplinks._sleep", side_effect=sleep), mock.patch("netmon.uplinks._clock", side_effect=lambda: now[0]):
+            code, data = self.poll()
         self.assertEqual(code, 0)
-        self.assertEqual([(r["ip"], r["port"], r["kind"], r["state"], r["detail"], r["outPct"], r["alert"]) for r in data["ports"]],
-                         [("10.0.1.5", "Gi49", "port", "not-read", "Not read yet (command to be confirmed)", None, False)])
-        self.assertEqual(self.logins, [], "no login to SG/CBS/C1300 until their command is confirmed")
-        self.assertEqual(uplinks.UPLINK_COMMANDS["cisco_s300"], {})
+        return conn, slept, [r for r in data["ports"] if r["ip"] == "10.0.1.5"]
+
+    def test_sx_load_from_two_readings_30_seconds_apart(self):
+        """Network team choice A (2026-11-27): bytes sent between two readings 30 s apart, over the port speed."""
+        # 3,000,000,000 bytes in 30 s = 800 Mbit/s = 80% of 1000 Mbps: over the 75% threshold.
+        conn, slept, rows = self.sx_poll(fx.SX_COUNTERS_CBS350.replace("37884659241", "40884659241"))
+        self.assertEqual(conn.sent, ["show interfaces status", "show interfaces counters", "show interfaces counters"])
+        self.assertEqual(slept, [30])
+        self.assertTrue(conn.closed)
+        self.assertEqual([(r["port"], r["kind"], r["state"]) for r in rows],
+                         [("Gi24", "port", "ok"), ("Gi2", "port", "not-read"), ("Gi49", "port", "not-read")])
+        by = {r["port"]: r for r in rows}
+        self.assertEqual({k: by["Gi24"][k] for k in ("bwMbps", "outBps", "outPct", "interval", "alert", "neighbor")},
+                         {"bwMbps": 1000, "outBps": 800000000, "outPct": 80.0, "interval": "30 seconds", "alert": True,
+                          "neighbor": "dsw-test-01"})
+        self.assertIn("speed", by["Gi2"]["detail"])
+        self.assertIn("counters", by["Gi49"]["detail"])
+        self.assertEqual((by["Gi2"]["alert"], by["Gi2"]["outPct"]), (False, None))
+
+    def test_sx_below_threshold(self):
+        _, _, rows = self.sx_poll(fx.SX_COUNTERS_CBS350.replace("37884659241", "37984659241"))
+        self.assertEqual((rows[0]["outPct"], rows[0]["alert"]), (2.7, False))  # 100,000,000 bytes in 30 s
+
+    def test_sx_counter_reset_is_not_a_reading(self):
+        _, _, rows = self.sx_poll(fx.SX_COUNTERS_CBS350.replace("37884659241", "1000"))
+        self.assertEqual((rows[0]["state"], rows[0]["alert"], rows[0]["outPct"]), ("not-read", False, None))
+        self.assertIn("reset", rows[0]["detail"])
+
+    def test_sx_rejected_command_fails_the_switch_rows(self):
+        conn, slept, rows = self.sx_poll(fx.SX_COUNTERS_CBS350, status="% Unrecognized command\n")
+        self.assertEqual({(r["state"], r["detail"]) for r in rows}, {("failed", "% Unrecognized command")})
+        self.assertEqual((conn.sent, slept), (["show interfaces status"], []), "stops at the first refused command")
+        self.assertTrue(conn.closed)
+
+    def test_sx_logs_in_with_the_remembered_set_and_sends_only_show(self):
+        conn, _, _ = self.sx_poll(fx.SX_COUNTERS_CBS350)
+        self.assertEqual(self.logins, [("cisco_s300", "10.0.1.5", "u1", "p1")])
+        self.assertTrue(all(c.startswith("show ") for c in conn.sent))
 
     def test_only_remembered_credential_set_is_used(self):
         mk = lambda ip: dev(ip, "core", "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")])

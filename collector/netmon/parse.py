@@ -526,6 +526,24 @@ def counter_octets(text):
     return out
 
 
+def port_speeds(text):
+    """Link speed in Mbps per port from SG/CBS/C1300 'show interfaces status': {port: Mbps}.
+
+    The Speed column is found by its header (ports block 'Port Type Duplex Speed ...', port-channel
+    block 'Ch Type Duplex Speed ...'). Ports that are down show '--' and are left out."""
+    out, col = {}, None
+    for line in (text or "").splitlines():
+        words = line.split()
+        if words[:1] in (["Port"], ["Ch"]) and "Speed" in words and "Duplex" in words:
+            col = words.index("Speed")
+            continue
+        if col is None or not words or not re.match(r"[A-Za-z]+\d", words[0]):
+            continue
+        if len(words) > col and words[col].isdigit():
+            out[short_if(words[0])] = int(words[col])
+    return out
+
+
 CHANNEL_PORT = re.compile(r"(?<![\w/.-])([A-Za-z][A-Za-z-]*\d+(?:/\d+)*(?:\.\d+)?)\((\w+)\)")
 
 

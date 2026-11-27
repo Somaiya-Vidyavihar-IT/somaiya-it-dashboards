@@ -393,6 +393,23 @@ class UplinkParsers(unittest.TestCase):
         # Without the dashes line the columns are unknown: a wrapped value is not trusted.
         self.assertEqual(parse.counter_octets(head.splitlines()[0] + "\n" + row + " " * 56 + "56\n"), {})
 
+    def test_sx_port_speeds(self):
+        """Link speed in Mbps from SG/CBS/C1300 'show interfaces status'; down ports ('--') are left out."""
+        cbs = parse.port_speeds(fx.SX_STATUS_CBS350)
+        self.assertEqual((cbs["Gi1"], cbs["Gi24"]), (1000, 1000))
+        self.assertNotIn("Gi2", cbs)
+        self.assertNotIn("Po1", cbs)
+        self.assertEqual(len(cbs), 9, "gi1, 3, 4, 6, 7, 8, 13, 15 and 24 are up")
+        c13 = parse.port_speeds(fx.SX_STATUS_C1300)
+        self.assertEqual((c13["Gi1/0/1"], c13["Gi1/0/3"], c13["Te1/0/1"], c13["Te1/0/3"]), (1000, 100, 10000, 10000))
+        self.assertNotIn("Te1/0/4", c13)
+        # A bundle that is up reports its speed in the port-channel block.
+        up = fx.SX_STATUS_C1300.replace("Po2         --     --      --      --       --    Not Present",
+                                        "Po2       Gigabit  Full    2000   Enabled  Off      Up")
+        self.assertEqual(parse.port_speeds(up)["Po2"], 2000)
+        self.assertEqual(parse.port_speeds("% Unrecognized command\n"), {})
+        self.assertEqual(parse.port_speeds(""), {})
+
 
 if __name__ == "__main__":
     unittest.main()

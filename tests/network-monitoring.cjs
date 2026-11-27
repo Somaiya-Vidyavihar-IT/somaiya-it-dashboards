@@ -142,7 +142,7 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   const R='2026-11-05T03:10:00Z',row=(o)=>({institute:'Engineering',role:'distribution',kind:'port',bundle:'',neighbor:'core-01',bwMbps:1000,outBps:null,outPct:null,interval:'5 minute',readAt:R,state:'ok',detail:'',alert:false,...o});
   const up={checkedAt:R,threshold:75,ports:[
    row({ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',port:'Te1/1/4',neighbor:'core-<b>01</b>',bwMbps:10000,outBps:1200000000,outPct:12}),
-   row({ip:'10.0.1.2',hostname:'asw-02',role:'access',port:'Gi49',neighbor:'dsw-01',bwMbps:null,interval:'',state:'not-read',detail:'Not read yet (command to be confirmed)'}),
+   row({ip:'10.0.1.2',hostname:'asw-02',role:'access',port:'Gi49',neighbor:'dsw-01',bwMbps:null,interval:'',state:'not-read',detail:'No working login known yet'}),
    row({ip:'10.0.0.1',hostname:'core-01',institute:'DC',role:'core',port:'Eth1/49',kind:'member',bundle:'Po10',neighbor:'dsw-01',bwMbps:10000,outBps:8000000000,outPct:80,interval:'30 seconds',alert:true}),
    row({ip:'10.0.1.1',hostname:'dsw-<img src=x onerror=alert(1)>',port:'Te1/1/3',bwMbps:null,state:'failed',detail:'SSH timed out <b>x</b>'}),
    row({ip:'10.0.0.1',hostname:'core-01',institute:'DC',role:'core',port:'Po10',kind:'bundle',bundle:'Po10',neighbor:'dsw-01',bwMbps:20000,outBps:16400000000,outPct:82,interval:'30 seconds',alert:true})]};
@@ -151,7 +151,7 @@ assert.ok(h.el('find-list').innerHTML.includes('ap-hall-09'));
   assert.ok(at('>Po10<')<at('>Eth1/49<')&&at('>Eth1/49<')<at('>Te1/1/4<')&&at('>Te1/1/4<')<at('>Te1/1/3<')&&at('>Te1/1/3<')<at('>Gi49<'),'Sorted by outgoing load, highest first; unread rows last');
   assert.equal((rows.match(/<tr class="alert-row">/g)||[]).length,2,'Alert rows are highlighted');
   assert.ok(rows.includes('82%')&&rows.includes('16.4 Gb/s')&&rows.includes('20 Gb/s')&&rows.includes('Member of Po10')&&rows.includes('Bundle'),'Load, rate, link speed, bundle and member');
-  assert.ok(rows.includes('Not read yet (command to be confirmed)')&&rows.includes('Not read')&&rows.includes('Failed'),'Not read and failed rows say why');
+  assert.ok(rows.includes('No working login known yet')&&rows.includes('Not read')&&rows.includes('Failed'),'Not read and failed rows say why');
   assert.ok(rows.includes('dsw-&lt;img')&&rows.includes('core-&lt;b&gt;01')&&rows.includes('SSH timed out &lt;b&gt;x')&&!rows.includes('<img')&&!rows.includes('<b>'),'Switch text is escaped');
   assert.ok(rows.includes('data-ip="10.0.0.1"')&&!rows.includes('data-ip="10.0.1.2"'),'Switches in the snapshot open their details');
   assert.ok(u.el('up-count').textContent.startsWith('5 of 5 uplink ports · 2 at or over 75% out'),u.el('up-count').textContent);

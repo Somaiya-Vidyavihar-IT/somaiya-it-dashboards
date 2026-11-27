@@ -22,7 +22,8 @@ log = logging.getLogger("netmon.uplinks")
 UPLINK_COMMANDS = {
     "cisco_ios": {"interface": "show interfaces {port}", "portchannel": "show etherchannel summary"},
     "cisco_nxos": {"interface": "show interface {port}", "portchannel": "show port-channel summary"},
-    "cisco_s300": {},  # SG/CBS/C1300: command to be confirmed on a live switch first
+    # SG/CBS/C1300 give byte totals, not a rate: read twice SX_SAMPLE_SECONDS apart (network team choice A).
+    "cisco_s300": {"status": "show interfaces status", "counters": "show interfaces counters"},
 }
 
 for _cmds in UPLINK_COMMANDS.values():
@@ -31,7 +32,10 @@ for _cmds in UPLINK_COMMANDS.values():
 
 # A port name that may go into a command: letters, then numbers separated by '/', optional '.sub'.
 PORT_RE = re.compile(r"^[A-Za-z][A-Za-z\-]*\d+(/\d+){0,3}(\.\d+)?$")
-SX_NOT_READ = "Not read yet (command to be confirmed)"
+SX_SAMPLE_SECONDS = 30  # SG/CBS/C1300: seconds between the two counter readings
+# Indirections so tests can run the 30-second wait instantly.
+_sleep = time.sleep
+_clock = time.monotonic
 NO_LOGIN = "No working login known yet"
 LOCK = "uplinks.lock"
 GRACE_SECONDS = 30  # a scheduled start a few seconds early must not skip a 10-minute round
@@ -170,8 +174,6 @@ def poll_switch(d, platform, login, cfg, collected, at):
     """Rows for one switch. login: (username, password) or None. Never raises."""
     selected = select_ports(d, collected)
     plain = lambda **kw: [_row(d, p["port"], "port", "", p["neighbor"], at, **kw) for p in selected]
-    if platform == "cisco_s300":
-        return plain(detail=SX_NOT_READ)
     if not UPLINK_COMMANDS.get(platform):
         return plain(detail=f"Driver not known yet ({platform or 'none'})")
     if login is None:
@@ -181,6 +183,17 @@ def poll_switch(d, platform, login, cfg, collected, at):
         conn = devices._connect(platform, d["ip"], login[0], login[1], cfg)
     except Exception as exc:
         return plain(state="failed", detail=devices._short_error(exc))
+    if platform == "cisco_s300":
+        try:
+            return _read_sx(conn, d, selected, at, threshold, timeout)
+        except Exception as exc:  # never expected: keep the round going
+            log.exception("%s: uplink read failed", d["ip"])
+            return plain(state="failed", detail=devices._short_error(exc))
+        finally:
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
     rows = []
     try:
         bundles = {}
@@ -210,6 +223,59 @@ def poll_switch(d, platform, login, cfg, collected, at):
             conn.disconnect()
         except Exception:
             pass
+    return rows
+
+
+def _read_sx(conn, d, selected, at, threshold, timeout):
+    """SG/CBS/C1300 rows: link speeds, then the byte counters twice, SX_SAMPLE_SECONDS apart.
+
+    Outgoing rate = bytes sent between the readings x 8 / seconds measured. Bundles are not known on
+    these switches yet, so every uplink is a plain port. A refused or failed command fails every row."""
+    plain = lambda **kw: [_row(d, p["port"], "port", "", p["neighbor"], at, **kw) for p in selected]
+    texts = {}
+
+    def ask(key):
+        try:
+            text = conn.send_command(command("cisco_s300", key), read_timeout=timeout)
+        except Exception as exc:
+            return devices._short_error(exc)
+        texts[key] = text
+        return _rejected(text)
+
+    problem = ask("status")
+    if problem:
+        return plain(state="failed", detail=problem)
+    speeds = parse.port_speeds(texts["status"])
+    readings = []
+    for i in range(2):
+        if i:
+            _sleep(SX_SAMPLE_SECONDS)
+        before = _clock()
+        problem = ask("counters")
+        if problem:
+            return plain(state="failed", detail=problem)
+        readings.append(((before + _clock()) / 2, parse.counter_octets(texts["counters"])))
+    (t1, first), (t2, second) = readings
+    seconds = t2 - t1
+    rows = []
+    for p in selected:
+        port = parse.short_if(p["port"])
+        row = _row(d, p["port"], "port", "", p["neighbor"], at)
+        a, b = first.get(port, {}).get("out"), second.get(port, {}).get("out")
+        if a is None or b is None:
+            row["detail"] = "Port not in the switch's counters"
+        elif b < a:
+            row["detail"] = "Counters were reset between the two readings; read again next time"
+        elif seconds <= 0:
+            row["detail"] = "No time between the two readings"
+        else:
+            mbps = speeds.get(port)
+            rate = {"outBps": round((b - a) * 8 / seconds), "bwKbps": mbps * 1000 if mbps else None,
+                    "interval": f"{SX_SAMPLE_SECONDS} seconds"}
+            row.update(reading(rate, threshold))
+            if not mbps:
+                row["detail"] = "No link speed in 'show interfaces status' (port down?), so no load percentage"
+        rows.append(row)
     return rows
 
 
