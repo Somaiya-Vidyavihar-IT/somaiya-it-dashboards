@@ -356,6 +356,43 @@ class UplinkParsers(unittest.TestCase):
         self.assertEqual([t[:3] for t in uplinks._plan(selected, {"Po3": ["Tw1/0/47", "Fi1/0/48"]})],
                          [("Po3", "bundle", "Po3"), ("Tw1/0/47", "member", "Po3"), ("Fi1/0/48", "member", "Po3")])
 
+    def test_sx_counters_cbs350(self):
+        got = parse.counter_octets(fx.SX_COUNTERS_CBS350)
+        self.assertEqual(len(got), 28 + 8, "28 ports and 8 port-channels")
+        self.assertEqual(got["Gi24"], {"in": 380353629057, "out": 37884659241})
+        self.assertEqual(got["Gi1"], {"in": 1806044466, "out": 7491776663})
+        self.assertEqual(got["Gi9"], {"in": 0, "out": 0})
+        self.assertEqual(got["Po1"], {"in": 0, "out": 0})
+
+    def test_sx_counters_c1300_joins_wrapped_numbers(self):
+        """C1300: a number wider than its column continues on the next line; those digits end the number."""
+        got = parse.counter_octets(fx.SX_COUNTERS_C1300)
+        self.assertEqual(len(got), 28 + 8)
+        self.assertEqual(got["Gi1/0/3"], {"in": 12604794801730, "out": 78710636854})
+        self.assertEqual(got["Gi1/0/4"], {"in": 12563817146068, "out": 78696946244})
+        self.assertEqual(got["Te1/0/1"], {"in": 3776351085438, "out": 50147171886056})
+        self.assertEqual(got["Te1/0/2"], {"in": 24926652478858, "out": 1985010996457})
+        self.assertEqual(got["Te1/0/3"], {"in": 5128000768, "out": 1513960064045})
+        self.assertEqual(got["Gi1/0/1"], {"in": 45461468579, "out": 144471453660})
+        self.assertEqual(got["Te1/0/4"], {"in": 0, "out": 0})
+
+    def test_sx_counters_unclear_values_are_left_out(self):
+        head = ("      Port       OutUcastPkts OutMcastPkts OutBcastPkts  OutOctets\n"
+                "---------------- ------------ ------------ ------------ ------------\n")
+        row = "    te1/0/1      38616338249    2360415      2615098    501471718860\n"
+        # Wrapped digits outside every column: the value is unsure, so it is not reported.
+        self.assertEqual(parse.counter_octets(head + row + "                                                       5\n"), {})
+        # A wrapped packet count (not the octets column) leaves the octets as they are.
+        self.assertEqual(parse.counter_octets(head + row + "                     7\n"),
+                         {"Te1/0/1": {"out": 501471718860}})
+        # Digits before any port row, rows with the wrong number of values, rejections: nothing.
+        self.assertEqual(parse.counter_octets(head + "                                                        56\n"), {})
+        self.assertEqual(parse.counter_octets(head + "    te1/0/1      38616338249    2360415\n"), {})
+        self.assertEqual(parse.counter_octets("% Unrecognized command\n"), {})
+        self.assertEqual(parse.counter_octets(""), {})
+        # Without the dashes line the columns are unknown: a wrapped value is not trusted.
+        self.assertEqual(parse.counter_octets(head.splitlines()[0] + "\n" + row + " " * 56 + "56\n"), {})
+
 
 if __name__ == "__main__":
     unittest.main()

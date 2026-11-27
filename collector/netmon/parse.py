@@ -478,6 +478,54 @@ def interface_rate(platform, text):
     return {"outBps": bps, "bwKbps": int(bw.group(1)) if bw else None, "interval": ""}
 
 
+def counter_octets(text):
+    """Total bytes per port from SG/CBS/C1300 'show interfaces counters': {port: {"in": n, "out": n}}.
+
+    Blocks of ports and port-channels, each a header with InOctets or OutOctets, a dashes line giving
+    the column widths, then one row per port. A number wider than its column continues on the next
+    line (C1300: '126047948017' with '30' under it is 12604794801730); those digits are joined by
+    column position. A value that cannot be read with certainty is left out: no reading is better
+    than a wrong one."""
+    rows = []  # [port, direction, values]; values[k] matches header word k
+    direction = spans = octets = last = None
+    width = 0
+    for line in (text or "").splitlines():
+        words = line.split()
+        if not words:
+            last = None
+            continue
+        if "InOctets" in words or "OutOctets" in words:
+            direction = "in" if "InOctets" in words else "out"
+            octets = words.index("InOctets" if direction == "in" else "OutOctets")
+            width, spans, last = len(words), None, None
+            continue
+        if direction is None:
+            continue
+        if set(line.strip()) <= {"-", " "}:
+            spans = [(m.start(), m.end()) for m in re.finditer(r"-+", line)]
+            spans = spans if len(spans) == width else None
+            continue
+        if all(w.isdigit() for w in words):  # continuation of the row above
+            if last is None:
+                continue
+            for m in re.finditer(r"\d+", line):
+                col = next((k for k, (a, b) in enumerate(spans or []) if a <= m.start() < b), None)
+                if col is None:
+                    last[2][octets] = None  # cannot tell which number these digits belong to
+                elif last[2][col] is not None:
+                    last[2][col] = int(str(last[2][col]) + m.group(0))
+            continue
+        last = None
+        if len(words) == width and re.match(r"[A-Za-z]", words[0]) and all(w.isdigit() for w in words[1:]):
+            last = [short_if(words[0]), direction, [None] + [int(w) for w in words[1:]]]
+            rows.append(last)
+    out = {}
+    for port, way, values in rows:
+        if values[octets] is not None:
+            out.setdefault(port, {})[way] = values[octets]
+    return out
+
+
 CHANNEL_PORT = re.compile(r"(?<![\w/.-])([A-Za-z][A-Za-z-]*\d+(?:/\d+)*(?:\.\d+)?)\((\w+)\)")
 
 
