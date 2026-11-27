@@ -9,7 +9,8 @@ from .parse import base_name, norm_mac
 
 SCHEMA = 1
 # Identity fields identity.fold puts on a record, copied to its device row (mainInRange is added to every row).
-IDENTITY_FIELDS = ("id", "ips", "otherIps", "serials", "ipWarning", "mainIpChanged")
+# readIp: the IP the row was read on (the uplink poller logs in there); a row without it was read on its ip.
+IDENTITY_FIELDS = ("id", "ips", "otherIps", "serials", "ipWarning", "mainIpChanged", "readIp")
 # Common Aruba/HPE AP OUIs. Shortcut: partial list, used only when LLDP/CDP text does not say
 # "Aruba"; extend via collector.aruba_ouis in config.toml when an AP model is missed.
 ARUBA_OUIS = {"00:0b:86", "00:1a:1e", "00:24:6c", "04:bd:88", "18:64:72", "20:4c:03", "24:de:c6",

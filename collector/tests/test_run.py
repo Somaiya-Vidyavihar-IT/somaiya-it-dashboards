@@ -866,6 +866,52 @@ class IdentityRuns(unittest.TestCase):
                 self.replies = {MAIN: _fail(MAIN, error), OTHER: _fail(OTHER, "SSH timed out")}
                 self.assertEqual(self._run()[0], want, "at most one fallback login per switch; never after an auth failure")
 
+    def test_main_login_timeout_keeps_the_main(self):
+        """Ruling 9: the main answers tcp/22 but its login times out, the other IP logs in: one row on the main
+        with a warning; the main is not moved by one failed login."""
+        self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 1})})
+        self.replies = {MAIN: _fail(MAIN, "SSH timed out")}
+        self.assertEqual(self._run()[0], [MAIN, OTHER], "the fallback login on the other IP")
+        sw = identity.load(self.store)["switches"][SER]
+        self.assertEqual(sw["main"], MAIN)
+        self.assertNotIn("mainChangedFrom", sw)
+        devs = [d for d in self._devices() if d["id"] == SER]
+        self.assertEqual(len(devs), 1)
+        dev = devs[0]
+        self.assertEqual((dev["ip"], dev["status"], dev["readIp"]), (MAIN, "ok", OTHER))
+        self.assertEqual(dev["ipWarning"], f"Login on main IP {MAIN} failed; read on {OTHER}")
+        self.assertNotIn("mainIpChanged", dev)
+
+    def test_excluded_main_is_not_kept_or_used(self):
+        """Ruling 11: a main now excluded gets no grace (the main moves) and Refresh never probes or logs in to it."""
+        self._run()
+        excl = config.validate({
+            "collector": {"switch_username": "u", "data_dir": self.tmp.name, "management_ranges": ["10.20.0.0/16"],
+                          "exclude": [MAIN + "/32"]},
+            "subnets": [{"cidr": "10.20.0.0/24", "sweep": False}, {"cidr": "10.30.0.0/24", "sweep": False}]})
+        logins, probed = [], []
+        p1, p2, p3 = self._patches(logins, probed)
+        with p1, p2, p3:
+            self.assertEqual(run.refresh_switch(excl, MAIN, "tester"), 0)
+        self.assertEqual(logins, [OTHER], "only the in-scope other IP")
+        self.assertFalse(any(MAIN in ips for ips in probed), probed)
+        sw = identity.load(self.store)["switches"][SER]
+        self.assertEqual((sw["main"], sw["mainChangedFrom"]), (OTHER, MAIN), "no grace for an excluded main")
+        self.assertNotIn(MAIN, self.store.read("state", "last-run.json")["closed"], "excluded, not 'no SSH'")
+        dev = next(d for d in self._devices() if d["id"] == SER)
+        self.assertEqual((dev["ip"], dev["readIp"]), (OTHER, OTHER))
+        # A full run: the same (the main was moved back by hand to check the run's own choice)
+        ident = identity.load(self.store)
+        ident["switches"][SER]["main"] = MAIN
+        identity.save(self.store, ident)
+        logins, probed = [], []
+        p1, p2, p3 = self._patches(logins, probed)
+        with p1, p2, p3:
+            self.assertEqual(run.full_run(excl), 0)
+        self.assertEqual(logins, [OTHER])
+        self.assertFalse(any(MAIN in ips for ips in probed), probed)
+        self.assertEqual(identity.load(self.store)["switches"][SER]["main"], OTHER)
+
     def test_login_on_other_ip_tries_main_set_first(self):
         self._map({SER: ([SER], MAIN, {MAIN: 1, OTHER: 21})})
         self.store.write({MAIN: "set2"}, "state", "credentials.json")

@@ -321,7 +321,7 @@ def in_management(cfg, ip):
         addr = ipaddress.IPv4Address(ip)
     except ValueError:
         return False
-    return any(addr in n for n in cfg["collector"]["management_nets"])
+    return any(addr in n for n in cfg["collector"].get("management_nets", ()))
 
 
 def in_scope(cfg, ip):

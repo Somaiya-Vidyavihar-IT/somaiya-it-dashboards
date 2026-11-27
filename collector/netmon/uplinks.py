@@ -170,8 +170,14 @@ def _rejected(text):
     return m.group(0).strip()[:200] if m else ""
 
 
+def read_ip(d):
+    """The IP a device row was read on (readIp, Ruling 10); rows without it were read on their ip."""
+    return d.get("readIp") or d["ip"]
+
+
 def poll_switch(d, platform, login, cfg, collected, at):
-    """Rows for one switch. login: (username, password) or None. Never raises."""
+    """Rows for one switch, read on read_ip(d); the rows keep ip = d["ip"] (the main IP).
+    login: (username, password) or None. Never raises."""
     selected = select_ports(d, collected)
     plain = lambda **kw: [_row(d, p["port"], "port", "", p["neighbor"], at, **kw) for p in selected]
     if not UPLINK_COMMANDS.get(platform):
@@ -180,7 +186,7 @@ def poll_switch(d, platform, login, cfg, collected, at):
         return plain(detail=NO_LOGIN)
     threshold, timeout = cfg["collector"]["uplink_threshold"], cfg["collector"]["command_timeout"]
     try:
-        conn = devices._connect(platform, d["ip"], login[0], login[1], cfg)
+        conn = devices._connect(platform, read_ip(d), login[0], login[1], cfg)
     except Exception as exc:
         return plain(state="failed", detail=devices._short_error(exc))
     if platform == "cisco_s300":
@@ -315,8 +321,13 @@ def poll(cfg, now=None, clock=time.monotonic, budget=None):
         # Switches with uplinks to read; one with none any more lists no rows (its old ones are not carried).
         with_ports = {d["ip"] for d in switches if select_ports(d, collected)}
         todo = order([d for d in switches if d["ip"] in with_ports and due(d, polled, now, cfg)], polled)
+        # A switch read on another IP (readIp) is logged in to there, with that IP's remembered set and driver,
+        # else its main IP's (an IP of the switch logs in with the main's set first, as in a full run).
+        def cred_set(d):
+            return cred_of.get(read_ip(d)) or cred_of.get(d["ip"])
+
         logins = {}
-        if any(cred_of.get(d["ip"]) for d in todo):
+        if any(cred_set(d) for d in todo):
             logins = {name: (user, pw) for name, user, pw in creds.switch_sets(cfg)}
         try:  # load netmiko once in this thread (parallel first imports deadlock; see run.full_run)
             import netmiko  # noqa: F401
@@ -325,9 +336,9 @@ def poll(cfg, now=None, clock=time.monotonic, budget=None):
             pass
 
         def work(d):
-            platform = platforms.get(d["ip"]) or d.get("platform") or ""
+            platform = platforms.get(read_ip(d)) or platforms.get(d["ip"]) or d.get("platform") or ""
             # Only the set that worked last time: never try the others (no failed logins against TACACS+).
-            return d["ip"], poll_switch(d, platform, logins.get(cred_of.get(d["ip"])), cfg, collected, at)
+            return d["ip"], poll_switch(d, platform, logins.get(cred_set(d)), cfg, collected, at)
 
         carried = {}
         for r in previous.get("ports", []):

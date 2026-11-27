@@ -138,6 +138,7 @@ class Cli(unittest.TestCase):
         bare = config.validate(self._raw())
         self.assertEqual((bare["collector"]["management_ranges"], bare["collector"]["management_nets"]), ([], []))
         self.assertFalse(config.in_management(bare, "10.30.5.200"))
+        self.assertFalse(config.in_management({"collector": {}}, "10.30.5.200"), "an unvalidated cfg: no KeyError")
         with self.assertRaises(config.ConfigError) as ctx:
             config.validate(self._raw(management_ranges=["bad"]))
         self.assertIn("collector.management_ranges", str(ctx.exception))

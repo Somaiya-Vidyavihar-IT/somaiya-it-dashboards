@@ -7,7 +7,9 @@ only for the daily re-check. Entry per switch, keyed by the first real serial se
  "lastRead", "replacedBy", "last": {hostname, model, version, platform, serial; ip once replaced}, "mainChangedFrom",
  "mainChangedAt"}.
 A main IP that does not answer tcp/22 while another IP of the switch does stays main (the switch is "Up with a
-warning", decision 5) until it has not answered for MAIN_SILENT_DAYS; then the main moves to a working IP.
+warning", decision 5) until it has not answered for MAIN_SILENT_DAYS; then the main moves to a working IP. A main
+that answers but whose login fails stays main until it has not logged in for MAIN_SILENT_DAYS. A main now out of
+scope or excluded gets neither grace.
 Pure logic plus load/save; no SSH or network I/O.
 """
 import ipaddress
@@ -19,7 +21,7 @@ from .parse import base_name
 
 FILE = "identity.json"
 RECHECK_HOURS = 20
-MAIN_SILENT_DAYS = 7  # a main IP not answering tcp/22 stays main this long (since its lastAnswered)
+MAIN_SILENT_DAYS = 7  # a main IP not answering (lastAnswered) or not logging in (lastLogin) stays main this long
 PLACEHOLDERS = frozenset({"UNKNOWN", "NA", "NONE", "NOTAVAILABLE"})
 SERIAL_RE = re.compile(r"[A-Z0-9]{6,}")
 # A switch key as forget --id and the API take it: an identity key (first serial seen) or "ip:<address>".
@@ -127,10 +129,12 @@ def row_fields(ident, ip):
 def fold(records, ident, reach=None):
     """One record per switch, for build. Returns (records, alias {any IP of a switch: its main IP}).
 
-    A switch's records become one copy with ip = the main IP and the row_fields, chosen in this order: the
-    main's ok record, the newest ok record (refreshedAt; tie: main first, then other_ips order), the main's
-    failed record, any. A record read on another IP gets ipWarning. Records of an IP no switch owns pass
-    through (copied) with id "ip:<ip>". reach is accepted for the build call shape; the choice does not use it.
+    A switch's records become one copy with ip = the main IP, readIp = the IP of the chosen record (the uplink
+    poller logs in there) and the row_fields, chosen in this order: the main's ok record, the newest ok record
+    (refreshedAt; tie: main first, then other_ips order), the main's failed record, any. An ok record read on
+    another IP gets ipWarning: "Login on main IP M failed; read on X" when the main has a (failed) record, else
+    "Read on X; main IP M did not answer". Records of an IP no switch owns pass through (copied) with id
+    "ip:<ip>" and no readIp. reach is accepted for the build call shape; the choice does not use it.
     """
     ident = ident or {}
     switches = ident.get("switches") or {}
@@ -161,9 +165,12 @@ def fold(records, ident, reach=None):
                   or (max(ok, key=lambda x: (x.get("refreshedAt") or "", -rank[x["ip"]])) if ok else None)
                   or next((x for x in recs if x["ip"] == main), None) or recs[0])
         c = dict(chosen, **row_fields(ident, main))
-        c["ip"] = main
-        if chosen["ip"] != main:
-            c["ipWarning"] = f"Read on {chosen['ip']}; main IP {main} did not answer"
+        c["ip"], c["readIp"] = main, chosen["ip"]
+        if chosen["ip"] != main and chosen.get("ok"):
+            # The main has a record only when it answered tcp/22 and was logged in to (and that failed).
+            c["ipWarning"] = (f"Login on main IP {main} failed; read on {chosen['ip']}"
+                              if any(x["ip"] == main for x in recs)
+                              else f"Read on {chosen['ip']}; main IP {main} did not answer")
         out.append(c)
     return out, alias
 
@@ -193,7 +200,8 @@ def _groups(reads):
                 by_serial[s] = i
     groups = {}
     for i, (r, serials) in enumerate(reads):
-        g = groups.setdefault(find(i), {"records": [], "serials": [], "hostname": base_name(r.get("hostname"))})
+        g = groups.setdefault(find(i), {"records": [], "serials": [], "hostname": ""})
+        g["hostname"] = g["hostname"] or base_name(r.get("hostname"))  # the first non-empty name in the group
         g["records"].append(r)
         g["serials"] += [s for s in serials if s not in g["serials"]]
     return list(groups.values())
@@ -235,22 +243,31 @@ def _new_key(switches, serial):
     return key
 
 
+def _recent(seen, field, now):
+    """True when seen[field] (missing: its firstSeen) is less than MAIN_SILENT_DAYS before now."""
+    since, current = _time(seen.get(field) or seen.get("firstSeen")), _time(now)
+    return bool(since and current and (current - since).total_seconds() < MAIN_SILENT_DAYS * 86400)
+
+
 def _choose_main(key, sw, cfg, now, logged_in, answered, first_seen, log):
     """Candidates: IPs that logged in this call, else that answer tcp/22, else all. Inside the management ranges
     wins; the current main is kept while it qualifies; else the earliest firstSeen, tie: the lowest IP.
 
-    The current main is also kept while it did not answer tcp/22 this call but answered (lastAnswered, missing:
-    its firstSeen) less than MAIN_SILENT_DAYS ago: main down, another IP answering is Up with a warning
-    (decision 5). A main that answered but did not log in while another IP did still moves (design 7.3)."""
+    The current main is also kept while it did not log in this call but either did not answer tcp/22 and answered
+    (lastAnswered) less than MAIN_SILENT_DAYS ago (main down, another IP answering: Up with a warning, decision 5;
+    Ruling 6), or answered tcp/22 and last logged in (lastLogin) less than MAIN_SILENT_DAYS ago (one failed login
+    never moves it, Ruling 9); missing times count from its firstSeen. After that the rule above moves it.
+    A main now out of scope or excluded is never kept that way and is not a candidate (Ruling 11); with no
+    other IP to move to it is left as it is."""
     ips = sw["ips"]
-    cands = [ip for ip in ips if ip in logged_in] or [ip for ip in ips if ip in answered] or list(ips)
-    pool = [ip for ip in cands if config_mod.in_management(cfg, ip)] or cands
     old = sw.get("main")
-    if old in pool:
+    usable = [ip for ip in ips if ip != old or config_mod.in_scope(cfg, ip)]
+    cands = [ip for ip in usable if ip in logged_in] or [ip for ip in usable if ip in answered] or usable
+    pool = [ip for ip in cands if config_mod.in_management(cfg, ip)] or cands
+    if old in pool or (ips and not pool):
         return
-    if old in ips and old not in answered:
-        since, current = _time(ips[old].get("lastAnswered") or ips[old].get("firstSeen")), _time(now)
-        if since and current and (current - since).total_seconds() < MAIN_SILENT_DAYS * 86400:
+    if old in usable and old not in logged_in:
+        if _recent(ips[old], "lastLogin" if old in answered else "lastAnswered", now):
             return
 
     def seen(ip):
@@ -323,7 +340,8 @@ def update(ident, records, cfg, now, answered, first_seen):
                     sw["ips"][ip] = {"firstSeen": first_seen.get(ip) or now}
                 owners[ip] = target
             sw["ips"][ip]["lastLogin"] = now
-        sw.update(serials=list(g["serials"]), hostname=g["hostname"], lastRead=now, replacedBy=None,
+        sw.update(serials=list(g["serials"]), hostname=g["hostname"] or sw.get("hostname") or "", lastRead=now,
+                  replacedBy=None,
                   last={k: take[0].get(k) or "" for k in LAST_FIELDS})
         touched.add(target)
 

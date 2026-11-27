@@ -290,6 +290,29 @@ class Poll(unittest.TestCase):
         self.assertEqual((by["10.0.0.4"]["state"], by["10.0.0.4"]["detail"]), ("failed", "SSH authentication failed"))
         self.assertEqual(self.store.read("state", "credentials.json"), creds, "the poller never changes the remembered sets")
 
+    def test_logs_in_where_the_row_was_read(self):
+        """Ruling 10: a switch read on another IP (readIp) is polled there, with that IP's remembered set and driver
+        (else its main IP's); the rows stay on the main IP. A row without readIp is polled on its ip."""
+        mk = lambda ip, **kw: dict(dev(ip, "core", "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")]),
+                                   **kw)
+        devices_ = [mk("10.0.0.1", readIp="10.0.9.1"),   # read on 10.0.9.1, which has its own set and driver
+                    mk("10.0.0.2", readIp="10.0.9.2"),   # read on 10.0.9.2, nothing remembered for it: the main's
+                    mk("10.0.0.3", readIp="10.0.0.3"),
+                    mk("10.0.0.4")]                       # an old row without readIp
+        creds = {"10.0.0.1": "set1", "10.0.9.1": "set2", "10.0.0.2": "set2", "10.0.0.3": "set1", "10.0.0.4": "set1"}
+        self.snapshot(devices_, creds=creds, platforms={"10.0.9.1": "cisco_nxos", "10.0.0.2": "cisco_nxos"})
+        ios = lambda cmd: "" if cmd == "show etherchannel summary" else iface("Gi1/0/48", 1000)
+        nxos = lambda cmd: "" if cmd == "show port-channel summary" else iface("Gi1/0/48", 1000, platform="cisco_nxos")
+        self.conns.update({"10.0.9.1": FakeConn(nxos), "10.0.9.2": FakeConn(nxos), "10.0.0.3": FakeConn(ios),
+                           "10.0.0.4": FakeConn(ios)})
+        code, data = self.poll()
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(self.logins), [("cisco_ios", "10.0.0.3", "u1", "p1"), ("cisco_ios", "10.0.0.4", "u1", "p1"),
+                                               ("cisco_nxos", "10.0.9.1", "u2", "p2"), ("cisco_nxos", "10.0.9.2", "u2", "p2")])
+        self.assertEqual([(r["ip"], r["state"]) for r in data["ports"]],
+                         [("10.0.0.1", "ok"), ("10.0.0.2", "ok"), ("10.0.0.3", "ok"), ("10.0.0.4", "ok")])
+        self.assertEqual(set(self.store.read("state", "uplinks-polled.json")), {"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"})
+
     def test_rows_of_switches_not_due_are_carried_over(self):
         core = dev("10.0.0.1", "core", "cisco_ios", [nb("Gi1/0/48", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")])
         asw = dev("10.0.1.2", "access", "cisco_ios", [nb("Gi1/0/49", "dsw-test-01", "10.0.1.1", peer="10.0.1.1")])

@@ -429,7 +429,9 @@ class SerialIdentity(unittest.TestCase):
         self.assertEqual(len(snap["devices"]), 1, snap["devices"])
         d = snap["devices"][0]
         self.assertEqual((d["ip"], d["status"], d["hostname"]), ("10.20.0.5", "ok", "asw-test-05"))
-        self.assertEqual(d["ipWarning"], "Read on 10.30.0.5; main IP 10.20.0.5 did not answer")
+        # The main has a failed record: it answered but its login failed (finding 4 of the fix wave)
+        self.assertEqual(d["ipWarning"], "Login on main IP 10.20.0.5 failed; read on 10.30.0.5")
+        self.assertEqual(d["readIp"], "10.30.0.5", "copied to the row for the uplink poller (Ruling 10)")
         self.assertEqual(d["mainIpChanged"], {"from": "10.30.0.5", "at": IT0})
         self.assertFalse([f for f in snap["findings"] if f["type"] == "ssh-failed"], "the failed main is folded in")
 

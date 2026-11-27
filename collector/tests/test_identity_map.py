@@ -6,8 +6,9 @@ from netmon import config, identity
 from netmon.store import Store
 
 CFG = config.validate({"collector": {"switch_username": "u", "management_ranges": ["10.20.0.0/16"]},
-                       "subnets": [{"cidr": "10.20.0.0/16"}]})
+                       "subnets": [{"cidr": "10.20.0.0/16"}, {"cidr": "10.30.0.0/16"}]})
 T0, T1 = "2026-11-27T08:00:00Z", "2026-11-28T08:00:00Z"
+T1_8D = "2026-11-20T08:00:00Z"  # 8 days before T1
 A, B, C, D = "FOC0000AAA", "FOC0000BBB", "FOC0000CCC", "FOC0000DDD"
 
 
@@ -103,22 +104,71 @@ class IdentityMap(unittest.TestCase):
         run(ident, [rec("10.30.0.5", [A]), rec("10.30.0.9", [A])])
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.5")
         # ... else the earliest firstSeen, tie: the lowest IP numerically (10.30.0.9 before 10.30.0.10)
-        # (the old main answers tcp/22 here; a main that does not answer is kept: test_silent_main_kept_for_7_days)
+        # (the old main answers tcp/22 here but has not logged in for 8 days; a main that does not answer is kept:
+        # test_silent_main_kept_for_7_days; one that logged in recently is kept: (c) below)
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.9": T0, "10.30.0.10": T0}, "10.30.0.5")}}
+        ident["switches"][A]["ips"]["10.30.0.5"]["lastLogin"] = T1_8D
         run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.9", [A]), rec("10.30.0.10", [A])],
             answered={"10.30.0.5"})
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.9")
         # ... firstSeen from the known switches wins over the map's own
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.9": T0, "10.30.0.10": T0}, "10.30.0.5")}}
+        ident["switches"][A]["ips"]["10.30.0.5"]["lastLogin"] = T1_8D
         run(ident, [rec("10.30.0.9", [A]), rec("10.30.0.10", [A])], first_seen={"10.30.0.10": "2026-01-01T00:00:00Z"},
             answered={"10.30.0.5"})
         self.assertEqual(ident["switches"][A]["main"], "10.30.0.10")
-        # (c) an IP whose login failed is not chosen while another logged in; (d) the change is recorded
+        # (c) Ruling 9: a main that answers tcp/22 but whose login failed while another IP logged in is kept while
+        # its last login is under MAIN_SILENT_DAYS old (one timeout never moves it) ...
         ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.6": T1}, "10.30.0.5")}}
-        logs = run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.6", [A])], answered={"10.30.0.5"})
+        logs = run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.6", [A])], answered={"10.30.0.5", "10.30.0.6"})
+        sw = ident["switches"][A]
+        self.assertEqual(sw["main"], "10.30.0.5", "last login 1 day ago: kept")
+        self.assertNotIn("mainChangedFrom", sw)
+        self.assertEqual(logs, [])
+        # ... and never traded for an IP outside the management ranges on a failed login
+        ident = {"switches": {A: switch([A], {"10.20.0.5": T0, "10.30.0.6": T0}, "10.20.0.5")}}
+        run(ident, [rec("10.20.0.5", None, ok=False), rec("10.30.0.6", [A])], answered={"10.20.0.5", "10.30.0.6"})
+        self.assertEqual(ident["switches"][A]["main"], "10.20.0.5")
+        # ... after 8 days without a login it moves; (d) the change is recorded
+        ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.30.0.6": T1}, "10.30.0.5")}}
+        ident["switches"][A]["ips"]["10.30.0.5"]["lastLogin"] = T1_8D
+        logs = run(ident, [rec("10.30.0.5", None, ok=False), rec("10.30.0.6", [A])], answered={"10.30.0.5", "10.30.0.6"})
         sw = ident["switches"][A]
         self.assertEqual((sw["main"], sw["mainChangedFrom"], sw["mainChangedAt"]), ("10.30.0.6", "10.30.0.5", T1))
         self.assertTrue(any("10.30.0.5" in l and "10.30.0.6" in l for l in logs), logs)
+        # (e) a main outside the ranges that logs in still gives way to a range IP that logs in (no grace)
+        ident = {"switches": {A: switch([A], {"10.30.0.5": T0, "10.20.0.6": T1}, "10.30.0.5")}}
+        run(ident, [rec("10.30.0.5", [A]), rec("10.20.0.6", [A])], answered={"10.30.0.5", "10.20.0.6"})
+        self.assertEqual(ident["switches"][A]["main"], "10.20.0.6")
+
+    def test_out_of_scope_main_gets_no_grace(self):
+        """Ruling 11: a main now excluded or outside every subnet is never kept by a grace rule nor chosen."""
+        m, o = "10.20.0.5", "10.30.0.6"
+        excl = config.validate({"collector": {"switch_username": "u", "management_ranges": ["10.20.0.0/16"],
+                                              "exclude": [m + "/32"]},
+                                "subnets": [{"cidr": "10.20.0.0/16"}, {"cidr": "10.30.0.0/16"}]})
+        gone = config.validate({"collector": {"switch_username": "u", "management_ranges": ["10.20.0.0/16"]},
+                                "subnets": [{"cidr": "10.30.0.0/16"}]})
+        for name, cfg in (("excluded", excl), ("outside every subnet", gone)):
+            for case, answered, records in (("silent 1 day (Ruling 6)", {o}, [rec(o, [A])]),
+                                            ("login failed (Ruling 9)", {m, o}, [rec(m, None, ok=False), rec(o, [A])]),
+                                            ("even logged in", {m, o}, [rec(m, [A]), rec(o, [A])])):
+                with self.subTest(name, case=case):
+                    ident = {"switches": {A: switch([A], {m: T0, o: T1}, m)}}
+                    identity.update(ident, records, cfg, T1, set(answered), {})
+                    sw = ident["switches"][A]
+                    self.assertEqual((sw["main"], sw.get("mainChangedFrom")), (o, m))
+            # its only IP: nothing to move to, the main is left as it is
+            ident = {"switches": {A: switch([A], {m: T0}, m)}}
+            identity.update(ident, [rec(m, [A])], cfg, T1, {m}, {})
+            self.assertEqual(ident["switches"][A]["main"], m, name)
+
+    def test_hostname_is_first_non_empty_name(self):
+        ident = {"switches": {}}
+        run(ident, [rec("10.20.0.5", [A], hostname=""), rec("10.20.0.6", [A], hostname="ASW-Test-02.example.test")], now=T0)
+        self.assertEqual(ident["switches"][A]["hostname"], "asw-test-02")
+        run(ident, [rec("10.20.0.5", [A], hostname=""), rec("10.20.0.6", [A], hostname=" ")])
+        self.assertEqual(ident["switches"][A]["hostname"], "asw-test-02", "all blank: the stored name is kept")
 
     def test_silent_main_kept_for_7_days(self):
         """Ruling 6: main not answering tcp/22, another IP logs in: the main stays (Up with a warning) until it
@@ -140,10 +190,11 @@ class IdentityMap(unittest.TestCase):
         run(ident, [rec(o, [A])], now=t8, answered={o})
         self.assertEqual(ident["switches"][A]["main"], m)
         self.assertEqual(ident["switches"][A]["ips"][m]["lastAnswered"], "2026-12-04T08:00:00Z")
-        # answered tcp/22 but its login failed while the other IP logged in: moves (design 7.3, unchanged)
+        # answered tcp/22 but its login failed while the other IP logged in: kept while its last login is under
+        # MAIN_SILENT_DAYS old (Ruling 9; test_main_ip_rules (c) moves it after 8 days)
         ident = {"switches": {A: switch([A], {m: T0, o: T0}, m)}}
         run(ident, [rec(m, None, ok=False), rec(o, [A])], now=T1, answered={m, o})
-        self.assertEqual(ident["switches"][A]["main"], o)
+        self.assertEqual(ident["switches"][A]["main"], m)
         self.assertEqual(ident["switches"][A]["ips"][m]["lastAnswered"], T1)
 
     def test_replacement_moves_ip(self):
@@ -221,9 +272,13 @@ class IdentityMap(unittest.TestCase):
         o1, o2 = rec("10.30.0.5", ["FOC0000TEST"]), dict(rec("10.30.0.6", ["FOC0000TEST"]), refreshedAt=T1)
         o_bad = rec("10.30.0.5", None, ok=False)
         unknown = rec("10.30.0.99", ["FOC0000ELSE"])
-        cases = [([o1, main_ok, o2], main_ok), ([main_bad, o1, o2], o2), ([main_bad, o1], o1),
-                 ([o_bad, main_bad], main_bad), ([o_bad], o_bad)]
-        for recs, want in cases:
+        failed = "Login on main IP 10.20.0.5 failed; read on {}"
+        silent = "Read on {}; main IP 10.20.0.5 did not answer"
+        # (records, chosen, ipWarning): only an ok record read on another IP gets one; its text says whether the
+        # main's login failed (the main has a record) or the main did not answer (no record)
+        cases = [([o1, main_ok, o2], main_ok, None), ([main_bad, o1, o2], o2, failed), ([main_bad, o1], o1, failed),
+                 ([o1, o2], o2, silent), ([o1], o1, silent), ([o_bad, main_bad], main_bad, None), ([o_bad], o_bad, None)]
+        for recs, want, warning in cases:
             out, alias = identity.fold([unknown] + recs, ident, {})
             self.assertEqual(len(out), 2)
             self.assertEqual((out[0]["ip"], out[0]["id"], out[0]["ips"], out[0]["otherIps"], out[0]["serials"]),
@@ -233,10 +288,12 @@ class IdentityMap(unittest.TestCase):
                              ("10.20.0.5", "FOC0000TEST", want["ok"], ["FOC0000TEST"],
                               ["10.20.0.5", "10.30.0.5", "10.30.0.6"], ["10.30.0.5", "10.30.0.6"]))
             self.assertEqual(got.get("refreshedAt"), want.get("refreshedAt"))
-            if want["ip"] == "10.20.0.5":
+            self.assertEqual(got["readIp"], want["ip"], "Ruling 10: the IP the row was read on")
+            self.assertNotIn("readIp", out[0], "an IP no switch owns: read on its own ip")
+            if warning is None:
                 self.assertNotIn("ipWarning", got)
             else:
-                self.assertEqual(got["ipWarning"], f"Read on {want['ip']}; main IP 10.20.0.5 did not answer")
+                self.assertEqual(got["ipWarning"], warning.format(want["ip"]))
             self.assertIsNot(got, want, "a copy")
         self.assertEqual(alias, {"10.20.0.5": "10.20.0.5", "10.30.0.5": "10.20.0.5", "10.30.0.6": "10.20.0.5"})
         self.assertNotIn("mainIpChanged", out[1])

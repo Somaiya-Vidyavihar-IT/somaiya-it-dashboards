@@ -523,15 +523,18 @@ def refresh_switch(cfg, ip, by="", locked=False):
         ident = identity_mod.load(store)
         key = identity_mod.owner(ident, ip)
         main = ident["switches"][key]["main"] if key is not None else ip
-        # Main first, then the other IPs oldest first; an other IP now out of scope or excluded is never used.
-        ips = [ip] if key is None else [main] + [o for o in identity_mod.other_ips(ident, key)
-                                                 if config_mod.in_scope(cfg, o)]
+        # Main first, then the other IPs oldest first; an IP now out of scope or excluded (the main too, Ruling 11)
+        # is never probed or logged in to.
+        ips = [ip] if key is None else [i for i in [main] + identity_mod.other_ips(ident, key)
+                                        if config_mod.in_scope(cfg, i)]
+        if not ips:
+            raise RefreshRefused(f"Every IP of {ip}'s switch is now out of scope or excluded.")
         read = {r["ip"] for r in last["records"]}
         if not (read | set(last.get("closed", []))) & set(ips):
             raise RefreshRefused(f"{ip} is not a switch from the last full discovery run.")
         answered = set()
-        target = main
-        if len(ips) > 1 or main not in read:
+        target = ips[0]
+        if len(ips) > 1 or target not in read:
             # Listed as "no SSH from the collector", or a switch with more than one IP: check tcp/22 before any login.
             col = cfg["collector"]
             answers = scan.probe(ips, 22, max(col["connect_timeout"], 2.0), len(ips))
@@ -571,8 +574,10 @@ def refresh_switch(cfg, ip, by="", locked=False):
         if target != main:
             # The main did not answer tcp/22: as in a full run, it has no record and is listed as closed, so its
             # older read does not hide this one (the row stays on the main with ipWarning while the main is kept).
+            # A main now out of scope or excluded was not probed: its record goes, but it is not "no SSH".
             records = [r for r in records if r["ip"] != main]
-            last = dict(last, closed=sorted(set(last.get("closed", [])) | {main}))
+            if config_mod.in_scope(cfg, main):
+                last = dict(last, closed=sorted(set(last.get("closed", [])) | {main}))
         store.write(platforms, "state", "platforms.json")
         store.write(cred_of, "state", "credentials.json")
         # Newest map (a full run may have finished meanwhile); joins, moves and the main IP choice as in a full run.
