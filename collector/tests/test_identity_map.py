@@ -126,6 +126,7 @@ class IdentityMap(unittest.TestCase):
         old = ident["switches"]["FOC0000OLD"]
         self.assertEqual((old["ips"], old["replacedBy"], old["main"]), ({}, "NEWSER0001", None))
         self.assertEqual((old["last"]["hostname"], old["last"]["model"]), ("asw-test-05", "C2960X-TEST"))
+        self.assertEqual(old["last"]["ip"], "10.20.0.5", "the IP it answered on, for 'its IP X now answers as ...'")
         sw = ident["switches"]["NEWSER0001"]
         self.assertEqual((sw["main"], sw["serials"], sw["ips"]["10.20.0.5"]["firstSeen"]), ("10.20.0.5", ["NEWSER0001"], T0))
         self.assertEqual(identity.alias(ident), {"10.20.0.5": "10.20.0.5"})
@@ -147,14 +148,18 @@ class IdentityMap(unittest.TestCase):
         self.assertIsNone(old["replacedBy"], "it still has IPs")
         self.assertEqual((old["main"], old["mainChangedFrom"]), ("10.30.0.7", "10.20.0.5"), "an IP that answers tcp/22")
 
-    def test_no_move_when_old_switch_read_elsewhere(self):
+    def test_ip_moves_without_replacement_when_old_switch_read_elsewhere(self):
         ident = {"switches": {}}
         run(ident, [rec("10.20.0.5", ["FOC0000OLD"]), rec("10.20.0.6", ["FOC0000OLD"])], now=T0)
+        self.assertEqual(ident["switches"]["FOC0000OLD"]["main"], "10.20.0.5")
         logs = run(ident, [rec("10.20.0.6", ["FOC0000OLD"]), rec("10.20.0.5", ["NEWSER0001"])])
-        self.assertEqual(identity.owner(ident, "10.20.0.5"), "FOC0000OLD")
-        self.assertNotIn("NEWSER0001", ident["switches"])
-        self.assertEqual(ident["switches"]["FOC0000OLD"]["ips"]["10.20.0.5"]["lastLogin"], T1)
+        self.assertEqual(identity.owner(ident, "10.20.0.5"), "NEWSER0001")
+        self.assertEqual(ident["switches"]["NEWSER0001"]["ips"]["10.20.0.5"]["lastLogin"], T1)
+        old = ident["switches"]["FOC0000OLD"]
+        self.assertEqual((list(old["ips"]), old["replacedBy"], old["main"]), (["10.20.0.6"], None, "10.20.0.6"),
+                         "not a replacement: OLD keeps its other IP")
         self.assertTrue(any("answers for more than one switch" in l for l in logs), logs)
+        self.assertFalse(any("hardware replaced" in l for l in logs), logs)
 
     def test_needs_login(self):
         ident = {"switches": {}}

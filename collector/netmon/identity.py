@@ -4,7 +4,8 @@ A switch is known by its member serials, not by an address. Every IP whose login
 known switch is that switch; one of its IPs is the main IP (shown and logged in to), the others get a login
 only for the daily re-check. Entry per switch, keyed by the first real serial seen (never changed):
 {"serials", "main", "hostname", "ips": {ip: {"firstSeen", "lastLogin", "lastTry"}}, "firstSeen", "lastRead",
- "replacedBy", "last": {hostname, model, version, platform, serial}, "mainChangedFrom", "mainChangedAt"}.
+ "replacedBy", "last": {hostname, model, version, platform, serial; ip once replaced}, "mainChangedFrom",
+ "mainChangedAt"}.
 Pure logic plus load/save; no SSH or network I/O.
 """
 import ipaddress
@@ -223,20 +224,11 @@ def update(ident, records, cfg, now, answered, first_seen):
         if g["target"]:
             fresh[g["target"]] = g["serials"]
 
-    # 2. apply: join, add new IPs, move IPs (hardware replaced), unless the IP's switch was read elsewhere
+    # 2. apply: join, add new IPs, move IPs. An IP whose old switch was read on another IP this call also
+    # moves, but that is not a replacement: the old switch keeps its other IPs and a warning is logged.
     touched, moved_to = set(), {}
     for g in groups:
-        target, take = g["target"], []
-        for r in g["records"]:
-            cur = owners.get(r["ip"])
-            if cur is not None and cur != target and cur in fresh:
-                switches[cur]["ips"][r["ip"]]["lastLogin"] = now
-                log.append(f"{r['ip']} answers for more than one switch ({cur} and {target or g['serials'][0]}); "
-                           f"it stays with {cur}")
-            else:
-                take.append(r)
-        if not take:
-            continue
+        target, take = g["target"], g["records"]
         if target is None:
             target = _new_key(switches, g["serials"][0])
             switches[target] = {"serials": [], "main": None, "hostname": "", "ips": {}, "firstSeen": now,
@@ -246,10 +238,15 @@ def update(ident, records, cfg, now, answered, first_seen):
             ip, cur = r["ip"], owners.get(r["ip"])
             if ip not in sw["ips"]:
                 if cur is not None:
-                    sw["ips"][ip] = switches[cur]["ips"].pop(ip)
-                    moved_to[cur] = target
+                    old = switches[cur]
+                    sw["ips"][ip] = old["ips"].pop(ip)
                     touched.add(cur)
-                    log.append(f"{ip} moved from {cur} to {target} (hardware replaced?)")
+                    if cur in fresh:
+                        log.append(f"{ip} answers for more than one switch ({cur} and {target}); "
+                                   f"it moves to {target}, {cur} keeps its other IPs")
+                    else:
+                        moved_to[cur] = (target, old.get("main") or ip)
+                        log.append(f"{ip} moved from {cur} to {target} (hardware replaced?)")
                 else:
                     sw["ips"][ip] = {"firstSeen": first_seen.get(ip) or now}
                 owners[ip] = target
@@ -258,8 +255,9 @@ def update(ident, records, cfg, now, answered, first_seen):
                   last={k: take[0].get(k) or "" for k in LAST_FIELDS})
         touched.add(target)
 
-    # 3. a switch left without IPs: merged (it shares serials with where its IPs went) or replaced
-    for key, dest in moved_to.items():
+    # 3. a switch left without IPs: merged (it shares serials with where its IPs went) or replaced; a
+    # replaced one keeps the main IP it had in last["ip"] ("its IP X now answers as <serial>")
+    for key, (dest, last_ip) in moved_to.items():
         old = switches.get(key)
         if old is None or old["ips"]:
             continue
@@ -269,6 +267,7 @@ def update(ident, records, cfg, now, answered, first_seen):
             log.append(f"{key} merged into {dest}")
         else:
             old["replacedBy"] = dest
+            old["last"] = dict(old.get("last") or {}, ip=last_ip)
             log.append(f"{key} has no IPs left; replaced by {dest} (shown Down until removed)")
 
     # 4. main IP of every switch read or changed
